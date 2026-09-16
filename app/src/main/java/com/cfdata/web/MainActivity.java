@@ -219,16 +219,17 @@ public class MainActivity extends Activity {
             try {
                 setLoadingMessage("正在准备本地服务...");
                 File backend = prepareBackendBinary();
+                File appDataDir = getFilesDir();
                 ProcessBuilder builder = new ProcessBuilder(
                         backend.getAbsolutePath(),
                         "-host", "127.0.0.1",
-                        "-port", String.valueOf(PORT)
+                        "-port", String.valueOf(PORT),
+                        "-data-dir", appDataDir.getAbsolutePath()
                 );
-                File appDataDir = getFilesDir();
                 builder.directory(appDataDir);
-                // os.Args[0] points at /data/app/.../lib/arm64/libcfdata.so on
-                // Android, which is read-only. Explicitly provide Go with the
-                // app-private writable directory used for subscriptions.json.
+                // Pass the writable Android app-private directory as an explicit
+                // Go command-line argument. The Go backend treats -data-dir as
+                // authoritative and will never fall back to lib/arm64 on Android.
                 builder.environment().put("CFDATA_DATA_DIR", appDataDir.getAbsolutePath());
                 builder.redirectErrorStream(true);
                 backendProcess = builder.start();
