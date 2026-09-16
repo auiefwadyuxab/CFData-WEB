@@ -224,7 +224,12 @@ public class MainActivity extends Activity {
                         "-host", "127.0.0.1",
                         "-port", String.valueOf(PORT)
                 );
-                builder.directory(getFilesDir());
+                File appDataDir = getFilesDir();
+                builder.directory(appDataDir);
+                // os.Args[0] points at /data/app/.../lib/arm64/libcfdata.so on
+                // Android, which is read-only. Explicitly provide Go with the
+                // app-private writable directory used for subscriptions.json.
+                builder.environment().put("CFDATA_DATA_DIR", appDataDir.getAbsolutePath());
                 builder.redirectErrorStream(true);
                 backendProcess = builder.start();
                 setLoadingMessage("正在连接本地服务...");
