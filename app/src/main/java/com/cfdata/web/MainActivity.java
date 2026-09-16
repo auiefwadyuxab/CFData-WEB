@@ -223,8 +223,7 @@ public class MainActivity extends Activity {
                 ProcessBuilder builder = new ProcessBuilder(
                         backend.getAbsolutePath(),
                         "-host", "127.0.0.1",
-                        "-port", String.valueOf(PORT),
-                        "-data-dir", appDataDir.getAbsolutePath()
+                        "-port", String.valueOf(PORT)
                 );
                 builder.directory(appDataDir);
                 // Pass the writable Android app-private directory as an explicit
