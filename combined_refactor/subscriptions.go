@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -74,23 +75,54 @@ type subscriptionSummary struct {
 	HasContent    bool              `json:"hasContent"`
 }
 
-func subscriptionFilePath() string {
-	// Android stores the native backend in the APK's nativeLibraryDir, which is
-	// read-only at runtime. MainActivity supplies the app-private writable
-	// directory through CFDATA_DATA_DIR when launching the backend.
-	if dataDir := strings.TrimSpace(os.Getenv("CFDATA_DATA_DIR")); dataDir != "" {
-		return filepath.Join(dataDir, subscriptionStoreFile)
+func subscriptionDataDirFromArgs() string {
+	args := os.Args
+	for i := 1; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "-data-dir" || arg == "--data-dir" {
+			if i+1 < len(args) {
+				return strings.TrimSpace(args[i+1])
+			}
+			continue
+		}
+		for _, prefix := range []string{"-data-dir=", "--data-dir="} {
+			if strings.HasPrefix(arg, prefix) {
+				return strings.TrimSpace(strings.TrimPrefix(arg, prefix))
+			}
+		}
+	}
+	return ""
+}
+
+func subscriptionDataDir() (string, error) {
+	// Android passes the writable app-private directory explicitly. This is the
+	// authoritative path for runtime subscription data.
+	if dir := subscriptionDataDirFromArgs(); dir != "" {
+		return dir, nil
+	}
+	if dir := strings.TrimSpace(os.Getenv("CFDATA_DATA_DIR")); dir != "" {
+		return dir, nil
 	}
 
-	// The Android launcher also sets the backend working directory to
-	// Context.getFilesDir(), so use the current working directory as a safe
-	// fallback for Android and other callers that explicitly set their cwd.
+	if runtime.GOOS == "android" {
+		return "", fmt.Errorf("Android 未提供可写数据目录，请使用 -data-dir <app files dir>")
+	}
+
+	// Desktop/server compatibility: use the current working directory first.
 	if workingDir, err := os.Getwd(); err == nil && strings.TrimSpace(workingDir) != "" {
-		return filepath.Join(workingDir, subscriptionStoreFile)
+		return workingDir, nil
 	}
 
-	// Preserve the original desktop/server fallback if cwd cannot be read.
-	return filepath.Join(filepath.Dir(os.Args[0]), subscriptionStoreFile)
+	// Legacy fallback for non-Android direct launches.
+	return filepath.Dir(os.Args[0]), nil
+}
+
+func subscriptionFilePath() (string, error) {
+	dir, err := subscriptionDataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, subscriptionStoreFile), nil
 }
 
 func ensureSubscriptionStoreLoaded() error {
@@ -101,7 +133,11 @@ func ensureSubscriptionStoreLoaded() error {
 		return nil
 	}
 
-	raw, err := os.ReadFile(subscriptionFilePath())
+	path, err := subscriptionFilePath()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		subscriptionStore.Items = []subscription{}
 		subscriptionStore.Loaded = true
@@ -147,7 +183,11 @@ func saveSubscriptionStoreLocked() error {
 
 	// Reuse the project's atomic file writer when available.  It writes the
 	// complete JSON to a temporary file and replaces the destination safely.
-	return atomicWriteFile(subscriptionFilePath(), data, 0644)
+	path, err := subscriptionFilePath()
+	if err != nil {
+		return err
+	}
+	return atomicWriteFile(path, data, 0644)
 }
 
 func subscriptionSummaryOf(item subscription) subscriptionSummary {
