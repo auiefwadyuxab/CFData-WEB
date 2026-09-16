@@ -56,6 +56,21 @@ jobs:
           go-version: "1.25.4"
           cache: true
 
+      - name: Validate subscription manager integration
+        run: |
+          test -s combined_refactor/subscriptions.go
+          grep -Fq '"subscription_list":' combined_refactor/server.go
+          grep -Fq '"subscription_get":' combined_refactor/server.go
+          grep -Fq '"subscription_save":' combined_refactor/server.go
+          grep -Fq '"subscription_update":' combined_refactor/server.go
+          grep -Fq '"subscription_delete":' combined_refactor/server.go
+          grep -Fq 'id="btnSubscriptions"' combined_refactor/index.html
+          grep -Fq "case 'subscription_list':" combined_refactor/index.html
+          grep -Fq "case 'subscription_detail':" combined_refactor/index.html
+          grep -Fq "type: 'subscription_update'" combined_refactor/index.html
+          grep -Fq "type: 'subscription_delete'" combined_refactor/index.html
+          echo "Subscription manager integration checks passed."
+
       - name: Create Release Assets Directory
         run: mkdir -p release_assets
 
@@ -149,6 +164,17 @@ jobs:
           curl -fsSL --retry 3 --connect-timeout 10 \
             https://curl.se/ca/cacert.pem \
             -o combined_refactor/ca-certificates.crt
+
+      - name: Validate subscription manager integration
+        run: |
+          test -s combined_refactor/subscriptions.go
+          grep -Fq '"subscription_list":' combined_refactor/server.go
+          grep -Fq '"subscription_get":' combined_refactor/server.go
+          grep -Fq '"subscription_save":' combined_refactor/server.go
+          grep -Fq '"subscription_update":' combined_refactor/server.go
+          grep -Fq '"subscription_delete":' combined_refactor/server.go
+          grep -Fq 'id="btnSubscriptions"' combined_refactor/index.html
+          echo "Subscription manager integration checks passed for Android build."
 
       - name: Build Android backend
         working-directory: combined_refactor
