@@ -22,12 +22,14 @@ import (
 )
 
 const (
-	singBoxNodesDirDefault               = "singbox_nodes"
+	singBoxSubscriptionRootDefault       = "singbox_subscriptions"
+	singBoxConfigTemplateDefault         = "singbox-r-template.json"
+	singBoxProviderFileDefault           = "Provider1.json"
 	singBoxEngineConfigFile              = "singbox-engine.json"
 	singBoxDefaultRepeat                 = 3
 	singBoxDefaultTimeout                = 8 * time.Second
 	singBoxDefaultUpdateInterval         = 6 * time.Hour
-	singBoxDefaultProviderInterval       = "1h"
+	singBoxDefaultProviderInterval       = "24h"
 	singBoxDefaultDownloadBytes    int64 = 10 << 20
 	singBoxMaxRepeat                     = 10
 	singBoxMaxBatchNodes                 = 3000
@@ -44,21 +46,25 @@ type singBoxConfiguredSubscription struct {
 }
 
 type singBoxEngineConfig struct {
-	Version                int                             `json:"version"`
-	NodesDir               string                          `json:"nodes_dir"`
-	UpdateIntervalHours    int                             `json:"update_interval_hours"`
-	StartupSync            bool                            `json:"startup_sync"`
-	ProviderUpdateInterval string                          `json:"provider_update_interval"`
-	TestRepeat             int                             `json:"test_repeat"`
-	TestTimeoutSeconds     int                             `json:"test_timeout_seconds"`
-	DownloadTestBytes      int64                           `json:"download_test_bytes"`
-	DownloadTestURL        string                          `json:"download_test_url"`
-	PreferSingTun          bool                            `json:"prefer_sing_tun"`
-	SingTunRequiresRoot    bool                            `json:"sing_tun_requires_root"`
-	MixedFallback          bool                            `json:"mixed_fallback"`
-	LocalProxyHost         string                          `json:"local_proxy_host"`
-	ControllerHost         string                          `json:"controller_host"`
-	Subscriptions          []singBoxConfiguredSubscription `json:"subscriptions,omitempty"`
+	Version                int                    `json:"version"`
+	SubscriptionRoot       string                 `json:"subscription_root"`
+	ConfigTemplate         string                 `json:"config_template"`
+	ProviderFile           string                 `json:"provider_file"`
+	ProviderUpdateInterval string                 `json:"provider_update_interval"`
+	ProviderExclude        string                 `json:"provider_exclude"`
+	ProviderHealthCheck    map[string]interface{} `json:"provider_health_check"`
+	StartupSync            bool                   `json:"startup_sync"`
+	SyncTimeoutSeconds     int                    `json:"sync_timeout_seconds"`
+	TestRepeat             int                    `json:"test_repeat"`
+	TestTimeoutSeconds     int                    `json:"test_timeout_seconds"`
+	DownloadTestBytes      int64                  `json:"download_test_bytes"`
+	DownloadTestURL        string                 `json:"download_test_url"`
+	TestTransport          string                 `json:"test_transport"`
+	PreferSingTun          bool                   `json:"prefer_sing_tun"`
+	SingTunRequiresRoot    bool                   `json:"sing_tun_requires_root"`
+	MixedFallback          bool                   `json:"mixed_fallback"`
+	LocalProxyHost         string                 `json:"local_proxy_host"`
+	ControllerHost         string                 `json:"controller_host"`
 }
 
 type singBoxNodeSource struct {
@@ -196,6 +202,106 @@ func init() {
 	http.HandleFunc("/api/subscription/singbox/sync-all", requireAuth(handleSingBoxSyncAll))
 	http.HandleFunc("/api/subscription/singbox/test", requireAuth(handleSingBoxTest))
 	http.HandleFunc("/api/subscription/singbox/test-batch", requireAuth(handleSingBoxBatchTest))
+	http.HandleFunc("/api/subscription/singbox/subscriptions", requireAuth(handleSingBoxSubscriptionsAPI))
+	http.HandleFunc("/api/subscription/singbox/save", requireAuth(handleSingBoxSaveAPI))
+	http.HandleFunc("/api/subscription/singbox/update", requireAuth(handleSingBoxUpdateAPI))
+	http.HandleFunc("/api/subscription/singbox/delete", requireAuth(handleSingBoxDeleteAPI))
+}
+
+func handleSingBoxSubscriptionsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeSingBoxJSON(w, 405, map[string]string{"error": "Method Not Allowed"})
+		return
+	}
+	items, e := listSubscriptions()
+	if e != nil {
+		writeSingBoxJSON(w, 500, map[string]string{"error": e.Error()})
+		return
+	}
+	writeSingBoxJSON(w, 200, map[string]interface{}{"success": true, "subscriptions": items})
+}
+func handleSingBoxSaveAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeSingBoxJSON(w, 405, map[string]string{"error": "Method Not Allowed"})
+		return
+	}
+	var body struct {
+		subscriptionSaveRequest
+		Sync bool `json:"sync"`
+	}
+	if e := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); e != nil {
+		writeSingBoxJSON(w, 400, map[string]string{"error": e.Error()})
+		return
+	}
+	item, e := createOrUpdateSubscription(body.subscriptionSaveRequest)
+	if e != nil {
+		writeSingBoxJSON(w, 400, map[string]string{"error": e.Error()})
+		return
+	}
+	summary := item
+	if body.Sync {
+		stored, e := getSubscription(item.ID)
+		if e != nil {
+			writeSingBoxJSON(w, 500, map[string]string{"error": e.Error()})
+			return
+		}
+		singBoxSyncMu.Lock()
+		summary, e = syncOneSingBoxSubscription(r.Context(), stored, true)
+		singBoxSyncMu.Unlock()
+		if e != nil {
+			writeSingBoxJSON(w, 200, map[string]interface{}{"success": true, "syncError": e.Error(), "subscription": summary})
+			return
+		}
+	}
+	writeSingBoxJSON(w, 200, map[string]interface{}{"success": true, "subscription": summary})
+}
+
+func handleSingBoxUpdateAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeSingBoxJSON(w, 405, map[string]string{"error": "Method Not Allowed"})
+		return
+	}
+	var req subscriptionIDRequest
+	if e := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); e != nil {
+		writeSingBoxJSON(w, 400, map[string]string{"error": e.Error()})
+		return
+	}
+	item, e := getSubscription(req.ID)
+	if e != nil {
+		writeSingBoxJSON(w, 404, map[string]string{"error": e.Error()})
+		return
+	}
+	summary, e := syncOneSingBoxSubscription(r.Context(), item, true)
+	if e != nil {
+		writeSingBoxJSON(w, 500, map[string]interface{}{"success": false, "syncError": e.Error(), "subscription": summary})
+		return
+	}
+	writeSingBoxJSON(w, 200, map[string]interface{}{"success": true, "subscription": summary})
+}
+func handleSingBoxDeleteAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeSingBoxJSON(w, 405, map[string]string{"error": "Method Not Allowed"})
+		return
+	}
+	var req subscriptionIDRequest
+	if e := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); e != nil {
+		writeSingBoxJSON(w, 400, map[string]string{"error": e.Error()})
+		return
+	}
+	item, e := getSubscription(req.ID)
+	if e != nil {
+		writeSingBoxJSON(w, 404, map[string]string{"error": e.Error()})
+		return
+	}
+	cfg, _ := loadSingBoxEngineConfig()
+	_ = deleteSubscription(req.ID)
+	if dir, e := singBoxSubscriptionDir(cfg, item.Name); e == nil {
+		_ = os.RemoveAll(dir)
+	}
+	if path, e := singBoxSubscriptionConfigPath(cfg, item.Name); e == nil {
+		_ = os.Remove(path)
+	}
+	writeSingBoxJSON(w, 200, map[string]interface{}{"success": true})
 }
 
 func dataDirectory() string {
@@ -216,21 +322,10 @@ func singBoxEngineConfigPath() string {
 
 func defaultSingBoxEngineConfig() singBoxEngineConfig {
 	return singBoxEngineConfig{
-		Version:                2,
-		NodesDir:               singBoxNodesDirDefault,
-		UpdateIntervalHours:    6,
-		StartupSync:            true,
-		ProviderUpdateInterval: singBoxDefaultProviderInterval,
-		TestRepeat:             singBoxDefaultRepeat,
-		TestTimeoutSeconds:     int(singBoxDefaultTimeout / time.Second),
-		DownloadTestBytes:      singBoxDefaultDownloadBytes,
-		DownloadTestURL:        "https://speed.cloudflare.com/__down?bytes=99999999",
-		PreferSingTun:          true,
-		SingTunRequiresRoot:    true,
-		MixedFallback:          true,
-		LocalProxyHost:         "127.0.0.1",
-		ControllerHost:         "127.0.0.1",
-		Subscriptions:          []singBoxConfiguredSubscription{},
+		Version: 5, SubscriptionRoot: singBoxSubscriptionRootDefault, ConfigTemplate: singBoxConfigTemplateDefault, ProviderFile: singBoxProviderFileDefault,
+		ProviderUpdateInterval: "24h", ProviderExclude: "节点|剩余|套餐|客服|官网", ProviderHealthCheck: map[string]interface{}{"enabled": true, "url": "http://cp.cloudflare.com/generate_204", "interval": "30m", "timeout": "3s"},
+		StartupSync: true, SyncTimeoutSeconds: 90, TestRepeat: 3, TestTimeoutSeconds: 8, DownloadTestBytes: singBoxDefaultDownloadBytes, DownloadTestURL: "https://speed.cloudflare.com/__down?bytes=99999999",
+		TestTransport: "mixed", PreferSingTun: false, SingTunRequiresRoot: true, MixedFallback: true, LocalProxyHost: "127.0.0.1", ControllerHost: "127.0.0.1",
 	}
 }
 
@@ -242,12 +337,9 @@ func loadSingBoxEngineConfig() (singBoxEngineConfig, error) {
 	path := singBoxEngineConfigPath()
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		data, marshalErr := json.MarshalIndent(cfg, "", "  ")
-		if marshalErr != nil {
-			return cfg, marshalErr
-		}
-		if writeErr := atomicWriteFile(path, data, 0600); writeErr != nil {
-			return cfg, fmt.Errorf("创建 %s 失败: %w", singBoxEngineConfigFile, writeErr)
+		data, _ := json.MarshalIndent(cfg, "", "  ")
+		if err := atomicWriteFile(path, data, 0600); err != nil {
+			return cfg, fmt.Errorf("创建 %s 失败: %w", singBoxEngineConfigFile, err)
 		}
 		return cfg, nil
 	}
@@ -257,26 +349,41 @@ func loadSingBoxEngineConfig() (singBoxEngineConfig, error) {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return cfg, fmt.Errorf("解析 %s 失败: %w", singBoxEngineConfigFile, err)
 	}
-	if strings.TrimSpace(cfg.NodesDir) == "" {
-		cfg.NodesDir = singBoxNodesDirDefault
+	if strings.TrimSpace(cfg.SubscriptionRoot) == "" {
+		cfg.SubscriptionRoot = singBoxSubscriptionRootDefault
 	}
-	if cfg.UpdateIntervalHours <= 0 {
-		cfg.UpdateIntervalHours = 6
+	if strings.TrimSpace(cfg.ConfigTemplate) == "" {
+		cfg.ConfigTemplate = singBoxConfigTemplateDefault
+	}
+	if strings.TrimSpace(cfg.ProviderFile) == "" {
+		cfg.ProviderFile = singBoxProviderFileDefault
 	}
 	if strings.TrimSpace(cfg.ProviderUpdateInterval) == "" {
-		cfg.ProviderUpdateInterval = singBoxDefaultProviderInterval
+		cfg.ProviderUpdateInterval = "24h"
+	}
+	if strings.TrimSpace(cfg.ProviderExclude) == "" {
+		cfg.ProviderExclude = "节点|剩余|套餐|客服|官网"
+	}
+	if cfg.SyncTimeoutSeconds <= 0 || cfg.SyncTimeoutSeconds > 600 {
+		cfg.SyncTimeoutSeconds = 90
 	}
 	if cfg.TestRepeat <= 0 || cfg.TestRepeat > singBoxMaxRepeat {
-		cfg.TestRepeat = singBoxDefaultRepeat
+		cfg.TestRepeat = 3
 	}
 	if cfg.TestTimeoutSeconds <= 0 || cfg.TestTimeoutSeconds > 60 {
-		cfg.TestTimeoutSeconds = int(singBoxDefaultTimeout / time.Second)
+		cfg.TestTimeoutSeconds = 8
 	}
-	if cfg.DownloadTestBytes <= 0 {
+	if cfg.DownloadTestBytes < 0 {
+		cfg.DownloadTestBytes = 0
+	}
+	if cfg.DownloadTestBytes == 0 {
 		cfg.DownloadTestBytes = singBoxDefaultDownloadBytes
 	}
 	if strings.TrimSpace(cfg.DownloadTestURL) == "" {
 		cfg.DownloadTestURL = "https://speed.cloudflare.com/__down?bytes=99999999"
+	}
+	if strings.TrimSpace(cfg.TestTransport) == "" {
+		cfg.TestTransport = "mixed"
 	}
 	if strings.TrimSpace(cfg.LocalProxyHost) == "" {
 		cfg.LocalProxyHost = "127.0.0.1"
@@ -288,29 +395,52 @@ func loadSingBoxEngineConfig() (singBoxEngineConfig, error) {
 }
 
 func singBoxNodesDir(cfg singBoxEngineConfig) string {
-	if filepath.IsAbs(cfg.NodesDir) {
-		return cfg.NodesDir
+	root := cfg.SubscriptionRoot
+	if filepath.IsAbs(root) {
+		return filepath.Clean(root)
 	}
-	return filepath.Join(singBoxDataDir(), cfg.NodesDir)
+	return filepath.Join(singBoxDataDir(), root)
+}
+
+func singBoxSubscriptionDir(cfg singBoxEngineConfig, name string) (string, error) {
+	if err := validateSubscriptionName(name); err != nil {
+		return "", err
+	}
+	return filepath.Join(singBoxNodesDir(cfg), name), nil
+}
+
+func singBoxSubscriptionConfigPath(cfg singBoxEngineConfig, name string) (string, error) {
+	if err := validateSubscriptionName(name); err != nil {
+		return "", err
+	}
+	return filepath.Join(singBoxNodesDir(cfg), name+".json"), nil
+}
+
+func singBoxProviderFilePath(cfg singBoxEngineConfig, name string) (string, error) {
+	dir, err := singBoxSubscriptionDir(cfg, name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, cfg.ProviderFile), nil
+}
+
+func singBoxProviderRelativePath(cfg singBoxEngineConfig, name string) (string, error) {
+	if err := validateSubscriptionName(name); err != nil {
+		return "", err
+	}
+	return "./" + name + "/" + cfg.ProviderFile, nil
 }
 
 func singBoxNodeFileName(subscriptionName string) (string, error) {
 	name := strings.TrimSpace(subscriptionName)
-	if name == "" {
-		return "", errors.New("订阅名称不能为空")
-	}
-	if name == "." || name == ".." || strings.ContainsAny(name, `/\\:*?"<>|`) {
-		return "", errors.New("订阅名称包含文件名不允许的字符")
+	if err := validateSubscriptionName(name); err != nil {
+		return "", err
 	}
 	return name + ".json", nil
 }
 
 func singBoxNodeFilePath(cfg singBoxEngineConfig, subscriptionName string) (string, error) {
-	fileName, err := singBoxNodeFileName(subscriptionName)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(singBoxNodesDir(cfg), fileName), nil
+	return singBoxSubscriptionConfigPath(cfg, subscriptionName)
 }
 
 func handleSingBoxNodes(w http.ResponseWriter, r *http.Request) {
@@ -320,29 +450,26 @@ func handleSingBoxNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg, err := loadSingBoxEngineConfig()
 	if err != nil {
-		writeSingBoxJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeSingBoxJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
-	if cfg.StartupSync {
-		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	syncError := ""
+	shouldSync := !strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("sync")), "0")
+	if cfg.StartupSync && shouldSync {
+		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(cfg.SyncTimeoutSeconds)*time.Second)
 		defer cancel()
-		if _, err := syncAllSingBoxSubscriptions(ctx, false); err != nil {
-			writeSingBoxJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
+		if _, e := syncAllSingBoxSubscriptions(ctx, false); e != nil {
+			syncError = e.Error()
 		}
 	}
 	nodes, err := loadAggregatedSingBoxNodes()
 	if err != nil {
-		writeSingBoxJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeSingBoxJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
 	views := make([]singBoxNodeView, 0, len(nodes))
 	for _, node := range nodes {
-		view := singBoxNodeView{
-			ID: node.ID, Server: node.Server, Port: node.Port, Protocol: node.Protocol,
-			Name: node.Name, Provider: node.Provider, OutboundTag: node.OutboundTag,
-			Sources: node.Sources, SourceCount: len(node.Sources), VariantCount: maxInt(1, len(node.Variants)),
-		}
+		view := singBoxNodeView{ID: node.ID, Server: node.Server, Port: node.Port, Protocol: node.Protocol, Name: node.Name, Provider: node.Provider, OutboundTag: node.OutboundTag, Sources: node.Sources, SourceCount: len(node.Sources), VariantCount: maxInt(1, len(node.Variants))}
 		singBoxState.RLock()
 		if result, ok := singBoxState.Results[node.ID]; ok {
 			copy := result
@@ -351,7 +478,11 @@ func handleSingBoxNodes(w http.ResponseWriter, r *http.Request) {
 		singBoxState.RUnlock()
 		views = append(views, view)
 	}
-	writeSingBoxJSON(w, http.StatusOK, map[string]interface{}{"success": true, "nodes": views})
+	payload := map[string]interface{}{"success": true, "nodes": views}
+	if syncError != "" {
+		payload["syncError"] = syncError
+	}
+	writeSingBoxJSON(w, http.StatusOK, payload)
 }
 
 func handleSingBoxSyncAll(w http.ResponseWriter, r *http.Request) {
@@ -508,69 +639,8 @@ func handleSingBoxBatchTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func mergeConfiguredSingBoxSubscriptions(configured []singBoxConfiguredSubscription) error {
-	if len(configured) == 0 {
-		return nil
-	}
-	if err := ensureSubscriptionStoreLoaded(); err != nil {
-		return err
-	}
-	subscriptionStore.Lock()
-	defer subscriptionStore.Unlock()
-	changed := false
-	seenNames := make(map[string]struct{}, len(configured))
-	for _, configuredItem := range configured {
-		name := strings.TrimSpace(configuredItem.Name)
-		urlText := strings.TrimSpace(configuredItem.URL)
-		if err := validateSubscriptionName(name); err != nil {
-			return fmt.Errorf("配置订阅 %q: %w", name, err)
-		}
-		if err := validateSubscriptionURL(urlText); err != nil {
-			return fmt.Errorf("配置订阅 %q: %w", name, err)
-		}
-		key := strings.ToLower(name)
-		if _, ok := seenNames[key]; ok {
-			return fmt.Errorf("singbox-engine.json 中存在重复订阅名称: %s", name)
-		}
-		seenNames[key] = struct{}{}
-		found := -1
-		for index := range subscriptionStore.Items {
-			if strings.EqualFold(strings.TrimSpace(subscriptionStore.Items[index].Name), name) {
-				found = index
-				break
-			}
-		}
-		headers := normalizeSubscriptionHeaders(configuredItem.Headers)
-		if found < 0 {
-			subscriptionStore.Items = append(subscriptionStore.Items, subscription{
-				ID: fmt.Sprintf("sub-%d", time.Now().UnixNano()), Name: name, URL: urlText,
-				Headers: headers, Status: "未更新", CreatedAt: time.Now().Format(time.RFC3339),
-			})
-			changed = true
-		} else {
-			item := &subscriptionStore.Items[found]
-			if item.URL != urlText || !sameStringMap(item.Headers, headers) {
-				item.URL = urlText
-				item.Headers = headers
-				changed = true
-			}
-		}
-	}
-	if !changed {
-		return nil
-	}
-	return saveSubscriptionStoreLocked()
-}
-
-func sameStringMap(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for key, value := range a {
-		if b[key] != value {
-			return false
-		}
-	}
-	return true
+	_ = configured
+	return nil
 }
 
 func syncAllSingBoxSubscriptions(ctx context.Context, force bool) (singBoxSyncResponse, error) {
@@ -581,11 +651,8 @@ func syncAllSingBoxSubscriptions(ctx context.Context, force bool) (singBoxSyncRe
 	if err != nil {
 		return singBoxSyncResponse{}, err
 	}
-	if err := mergeConfiguredSingBoxSubscriptions(cfg.Subscriptions); err != nil {
-		return singBoxSyncResponse{}, err
-	}
 	if err := os.MkdirAll(singBoxNodesDir(cfg), 0700); err != nil {
-		return singBoxSyncResponse{}, fmt.Errorf("创建 sing-box 节点目录失败: %w", err)
+		return singBoxSyncResponse{}, fmt.Errorf("创建订阅目录失败: %w", err)
 	}
 	if err := ensureSubscriptionStoreLoaded(); err != nil {
 		return singBoxSyncResponse{}, err
@@ -594,182 +661,255 @@ func syncAllSingBoxSubscriptions(ctx context.Context, force bool) (singBoxSyncRe
 	items := append([]subscription(nil), subscriptionStore.Items...)
 	subscriptionStore.Unlock()
 
-	response := singBoxSyncResponse{Success: true, Subscriptions: len(items), Errors: []string{}}
-	activeFiles := make(map[string]struct{}, len(items))
-	interval := time.Duration(cfg.UpdateIntervalHours) * time.Hour
+	resp := singBoxSyncResponse{Success: true, Subscriptions: len(items), Errors: []string{}}
+	interval := 24 * time.Hour
+	if d, e := time.ParseDuration(strings.TrimSpace(cfg.ProviderUpdateInterval)); e == nil && d > 0 {
+		interval = d
+	}
 
 	for _, item := range items {
-		filePath, pathErr := singBoxNodeFilePath(cfg, item.Name)
-		if pathErr != nil {
-			response.Errors = append(response.Errors, fmt.Sprintf("%s: %v", item.Name, pathErr))
-			continue
-		}
-		activeFiles[filepath.Clean(filePath)] = struct{}{}
-
-		needFetch := force
-		if info, statErr := os.Stat(filePath); statErr != nil {
-			needFetch = true
-		} else if interval <= 0 || time.Since(info.ModTime()) >= interval {
-			needFetch = true
-		} else if !providerCacheLooksValid(filePath) {
-			needFetch = true
-		}
-
-		if needFetch {
-			if err := refreshSubscriptionProvider(ctx, cfg, item, filePath); err != nil {
-				response.Errors = append(response.Errors, fmt.Sprintf("%s: Provider 更新失败: %v", item.Name, err))
-				continue
+		providerPath, pathErr := singBoxProviderFilePath(cfg, item.Name)
+		configPath, configErr := singBoxSubscriptionConfigPath(cfg, item.Name)
+		if pathErr != nil || configErr != nil {
+			if pathErr != nil {
+				resp.Errors = append(resp.Errors, fmt.Sprintf("%s: %v", item.Name, pathErr))
+			} else {
+				resp.Errors = append(resp.Errors, fmt.Sprintf("%s: %v", item.Name, configErr))
 			}
-			response.Updated++
-		} else {
-			response.Cached++
-		}
-	}
-
-	entries, _ := os.ReadDir(singBoxNodesDir(cfg))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == singBoxEngineConfigFile {
 			continue
 		}
-		path := filepath.Clean(filepath.Join(singBoxNodesDir(cfg), entry.Name()))
-		if _, ok := activeFiles[path]; !ok {
-			_ = os.Remove(path)
+
+		need := force
+		if _, e := os.Stat(configPath); e != nil {
+			need = true
 		}
+		if st, e := os.Stat(providerPath); e != nil || !providerCacheLooksValid(providerPath) || time.Since(st.ModTime()) >= interval {
+			need = true
+		}
+		if !need {
+			resp.Cached++
+			continue
+		}
+
+		ctxOne, cancel := context.WithTimeout(ctx, time.Duration(cfg.SyncTimeoutSeconds)*time.Second)
+		_, e := syncOneSingBoxSubscription(ctxOne, item, true)
+		cancel()
+		if e != nil {
+			resp.Errors = append(resp.Errors, fmt.Sprintf("%s: %v", item.Name, e))
+			continue
+		}
+		resp.Updated++
 	}
 
-	nodes, loadErr := loadAggregatedSingBoxNodes()
-	if loadErr == nil {
-		response.Nodes = len(nodes)
+	nodes, e := loadAggregatedSingBoxNodes()
+	if e == nil {
+		resp.Nodes = len(nodes)
 	}
-	if len(response.Errors) > 0 {
-		response.Success = response.Nodes > 0 || len(items) == 0
+	if len(resp.Errors) > 0 {
+		resp.Success = resp.Nodes > 0 || len(items) == 0
 	}
-	return response, nil
+	return resp, nil
 }
 
 func refreshSubscriptionProvider(ctx context.Context, cfg singBoxEngineConfig, item subscription, path string) error {
-	binary, err := findSingBoxBinary()
+	_, err := syncOneSingBoxSubscription(ctx, item, true)
+	return err
+}
+
+func syncOneSingBoxSubscription(ctx context.Context, item subscription, force bool) (subscriptionSummary, error) {
+	cfg, err := loadSingBoxEngineConfig()
 	if err != nil {
-		return err
+		return subscriptionSummary{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
+	if err := validateSubscriptionName(item.Name); err != nil {
+		return subscriptionSummary{}, err
+	}
+	if err := validateSubscriptionURL(item.URL); err != nil {
+		return subscriptionSummary{}, err
+	}
+	root := singBoxNodesDir(cfg)
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return subscriptionSummary{}, err
+	}
+	subDir, err := singBoxSubscriptionDir(cfg, item.Name)
+	if err != nil {
+		return subscriptionSummary{}, err
+	}
+	if err := os.MkdirAll(subDir, 0700); err != nil {
+		return subscriptionSummary{}, err
+	}
+	configPath, err := singBoxSubscriptionConfigPath(cfg, item.Name)
+	if err != nil {
+		return subscriptionSummary{}, err
+	}
+	providerPath, err := singBoxProviderFilePath(cfg, item.Name)
+	if err != nil {
+		return subscriptionSummary{}, err
 	}
 
-	backupPath := path + ".bak"
-	_ = os.Remove(backupPath)
-	if _, statErr := os.Stat(path); statErr == nil {
-		if err := os.Rename(path, backupPath); err != nil {
-			return fmt.Errorf("备份 Provider 缓存失败: %w", err)
+	if !force && providerCacheLooksValid(providerPath) {
+		if _, e := os.Stat(configPath); e == nil {
+			if st, e := os.Stat(providerPath); e == nil {
+				interval := 24 * time.Hour
+				if d, de := time.ParseDuration(strings.TrimSpace(cfg.ProviderUpdateInterval)); de == nil && d > 0 {
+					interval = d
+				}
+				if time.Since(st.ModTime()) < interval {
+					return updateSubscriptionState(item, "success", "", configPath, providerPath)
+				}
+			}
 		}
 	}
-	defer func() {
-		_ = os.Remove(backupPath)
-	}()
 
-	configPath, logPath, err := createProviderSyncConfig(cfg, item, path)
+	templatePath := filepath.Join(singBoxDataDir(), cfg.ConfigTemplate)
+	templateRaw, err := os.ReadFile(templatePath)
 	if err != nil {
-		_ = restoreProviderBackup(path, backupPath)
-		return err
+		return subscriptionSummary{}, fmt.Errorf("读取 reF1nd 模板失败: %w", err)
 	}
-	defer os.Remove(configPath)
+	var doc map[string]interface{}
+	if err := json.Unmarshal(templateRaw, &doc); err != nil {
+		return subscriptionSummary{}, fmt.Errorf("解析 reF1nd 模板失败: %w", err)
+	}
+	providers, ok := doc["providers"].([]interface{})
+	if !ok || len(providers) == 0 {
+		return subscriptionSummary{}, errors.New("reF1nd 模板缺少 providers")
+	}
+	provider, ok := providers[0].(map[string]interface{})
+	if !ok {
+		return subscriptionSummary{}, errors.New("reF1nd Provider1 配置格式错误")
+	}
+	relProvider, err := singBoxProviderRelativePath(cfg, item.Name)
+	if err != nil {
+		return subscriptionSummary{}, err
+	}
+	provider["tag"] = "Provider1"
+	provider["type"] = "remote"
+	provider["url"] = strings.TrimSpace(item.URL)
+	provider["exclude"] = cfg.ProviderExclude
+	provider["path"] = relProvider
+	provider["update_interval"] = cfg.ProviderUpdateInterval
+	provider["health_check"] = cfg.ProviderHealthCheck
+	providers[0] = provider
+	doc["providers"] = providers
+	data, _ := json.MarshalIndent(doc, "", "  ")
+	if err := atomicWriteFile(configPath, data, 0600); err != nil {
+		return subscriptionSummary{}, fmt.Errorf("保存订阅配置失败: %w", err)
+	}
+	bootstrapPath := filepath.Join(root, fmt.Sprintf(".provider-bootstrap-%d.json", time.Now().UnixNano()))
+	logPath := strings.TrimSuffix(bootstrapPath, ".json") + ".log"
+	defer os.Remove(bootstrapPath)
 	defer os.Remove(logPath)
-
-	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
+	bootstrap := map[string]interface{}{"log": map[string]interface{}{"disabled": false, "level": "info", "output": logPath, "timestamp": true}, "providers": []interface{}{map[string]interface{}{"tag": "Provider1", "type": "remote", "url": strings.TrimSpace(item.URL), "exclude": cfg.ProviderExclude, "path": relProvider, "update_interval": cfg.ProviderUpdateInterval, "health_check": cfg.ProviderHealthCheck}}, "outbounds": []interface{}{map[string]interface{}{"tag": "direct", "type": "direct"}}, "route": map[string]interface{}{"final": "direct", "auto_detect_interface": true}}
+	bd, _ := json.MarshalIndent(bootstrap, "", "  ")
+	if err := os.WriteFile(bootstrapPath, bd, 0600); err != nil {
+		return subscriptionSummary{}, err
+	}
+	binary, err := findSingBoxBinary()
+	if err != nil {
+		return subscriptionSummary{}, err
+	}
+	if err := runSingBoxCheck(ctx, binary, bootstrapPath, root); err != nil {
+		return subscriptionSummary{}, fmt.Errorf("Provider 配置检查失败: %w", err)
+	}
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		_ = restoreProviderBackup(path, backupPath)
-		return err
+		return subscriptionSummary{}, err
 	}
+	cmd := exec.CommandContext(ctx, binary, "run", "-c", bootstrapPath)
+	cmd.Dir = root
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
-		_ = restoreProviderBackup(path, backupPath)
-		return err
+		return subscriptionSummary{}, fmt.Errorf("启动 sing-box Provider 失败: %w", err)
 	}
-
-	deadline := time.Now().Add(45 * time.Second)
-	var startErr error
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	deadline := time.Now().Add(time.Duration(cfg.SyncTimeoutSeconds) * time.Second)
+	var runErr error
 	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			startErr = ctx.Err()
-			break
-		}
-		if providerCacheLooksValid(path) {
+		if providerCacheLooksValid(providerPath) {
 			_ = terminateProcess(cmd)
-			_ = logFile.Close()
-			return nil
+			<-done
+			logFile.Close()
+			return updateSubscriptionState(item, "success", "", configPath, providerPath)
 		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			startErr = fmt.Errorf("sing-box Provider 进程提前退出")
+		select {
+		case e := <-done:
+			runErr = e
+		case <-time.After(250 * time.Millisecond):
+		}
+		if runErr != nil {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		if ctx.Err() != nil {
+			runErr = ctx.Err()
+			break
+		}
 	}
 	_ = terminateProcess(cmd)
-	_ = logFile.Close()
-
-	if startErr == nil {
-		startErr = fmt.Errorf("等待 Provider 缓存生成超时")
+	select {
+	case <-done:
+	default:
 	}
+	logFile.Close()
 	logText, _ := os.ReadFile(logPath)
-	if trimmed := strings.TrimSpace(string(logText)); trimmed != "" {
-		startErr = fmt.Errorf("%w；核心日志: %s", startErr, lastLogLines(trimmed, 10))
+	if runErr == nil {
+		runErr = errors.New("等待 Provider1.json 生成超时")
 	}
-	_ = os.Remove(path)
-	if restoreErr := restoreProviderBackup(path, backupPath); restoreErr != nil {
-		return fmt.Errorf("%w；恢复旧缓存失败: %v", startErr, restoreErr)
+	if strings.TrimSpace(string(logText)) != "" {
+		runErr = fmt.Errorf("%w；核心日志: %s", runErr, lastLogLines(string(logText), 12))
 	}
-	return startErr
+	return updateSubscriptionState(item, "error", runErr.Error(), configPath, providerPath)
 }
 
-func createProviderSyncConfig(cfg singBoxEngineConfig, item subscription, path string) (string, string, error) {
-	tmpDir := singBoxDataDir()
-	if err := os.MkdirAll(tmpDir, 0700); err != nil {
-		return "", "", err
-	}
-	providerTag := singBoxProviderTag(item.ID)
-	headers := effectiveSubscriptionHeaders(item.Headers)
-	config := map[string]interface{}{
-		"providers": []interface{}{
-			map[string]interface{}{
-				"type":            "remote",
-				"tag":             providerTag,
-				"url":             strings.TrimSpace(item.URL),
-				"path":            path,
-				"http_client":     map[string]interface{}{"headers": headers},
-				"update_interval": cfg.ProviderUpdateInterval,
-			},
-		},
-		"outbounds": []interface{}{map[string]interface{}{"type": "direct", "tag": "direct"}},
-		"route":     map[string]interface{}{"final": "direct", "auto_detect_interface": true},
-	}
-	configPath := filepath.Join(tmpDir, fmt.Sprintf(".singbox-provider-%d.json", time.Now().UnixNano()))
-	logPath := filepath.Join(tmpDir, fmt.Sprintf(".singbox-provider-%d.log", time.Now().UnixNano()))
-	data, err := json.MarshalIndent(config, "", "  ")
+func runSingBoxCheck(ctx context.Context, binary, configPath, workDir string) error {
+	cmd := exec.CommandContext(ctx, binary, "check", "-c", configPath)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", "", err
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
 	}
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return "", "", err
-	}
-	return configPath, logPath, nil
+	return nil
 }
 
-func effectiveSubscriptionHeaders(headers map[string]string) map[string]string {
-	result := map[string]string{
-		"User-Agent": "v2rayNG/2.2.6",
-		"Connection": "close",
+func updateSubscriptionState(item subscription, status, message, configPath, providerPath string) (subscriptionSummary, error) {
+	if err := ensureSubscriptionStoreLoaded(); err != nil {
+		return subscriptionSummary{}, err
 	}
-	for key, value := range headers {
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		if key != "" && value != "" {
-			result[key] = value
+	count := 0
+	if providerCacheLooksValid(providerPath) {
+		if nodes, e := loadProviderCacheNodes(providerPath, item, singBoxProviderTag(item.ID)); e == nil {
+			count = len(nodes)
 		}
 	}
-	return result
+	subscriptionStore.Lock()
+	defer subscriptionStore.Unlock()
+	for i := range subscriptionStore.Items {
+		if subscriptionStore.Items[i].ID != item.ID {
+			continue
+		}
+		item2 := &subscriptionStore.Items[i]
+		item2.Status = status
+		item2.Error = message
+		item2.ConfigPath = configPath
+		item2.ProviderPath = providerPath
+		item2.NodeCount = count
+		item2.UpdatedAt = time.Now().Format(time.RFC3339)
+		item2.StatusCode = 0
+		item2.ContentType = ""
+		item2.ContentLength = 0
+		item2.Format = "sing-box-provider"
+		if err := saveSubscriptionStoreLocked(); err != nil {
+			return subscriptionSummary{}, err
+		}
+		return subscriptionSummaryOf(*item2), nil
+	}
+	return subscriptionSummary{}, fmt.Errorf("订阅不存在: %s", item.ID)
 }
 
 func providerCacheLooksValid(path string) bool {
@@ -789,27 +929,11 @@ func providerCacheLooksValid(path string) bool {
 	return len(doc.Outbounds) > 0 || len(doc.Endpoints) > 0
 }
 
-func restoreProviderBackup(path, backupPath string) error {
-	if _, err := os.Stat(backupPath); err != nil {
-		return nil
-	}
-	_ = os.Remove(path)
-	return os.Rename(backupPath, path)
-}
-
 func loadAggregatedSingBoxNodes() ([]singBoxCachedNode, error) {
 	cfg, err := loadSingBoxEngineConfig()
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(singBoxNodesDir(cfg))
-	if os.IsNotExist(err) {
-		return []singBoxCachedNode{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-
 	if err := ensureSubscriptionStoreLoaded(); err != nil {
 		return nil, err
 	}
@@ -819,53 +943,48 @@ func loadAggregatedSingBoxNodes() ([]singBoxCachedNode, error) {
 		subMap[item.Name] = item
 	}
 	subscriptionStore.Unlock()
-
-	merged := make(map[string]*singBoxCachedNode)
-	order := make([]string, 0)
+	entries, err := os.ReadDir(singBoxNodesDir(cfg))
+	if os.IsNotExist(err) {
+		return []singBoxCachedNode{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	merged := map[string]*singBoxCachedNode{}
+	order := []string{}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == singBoxEngineConfigFile {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == filepath.Base(singBoxEngineConfigFile) {
 			continue
 		}
-		subName := strings.TrimSuffix(entry.Name(), ".json")
-		item := subMap[subName]
-		providerTag := singBoxProviderTag(item.ID)
-		nodes, err := loadProviderCacheNodes(filepath.Join(singBoxNodesDir(cfg), entry.Name()), item, providerTag)
-		if err != nil {
+		name := strings.TrimSuffix(entry.Name(), ".json")
+		item := subMap[name]
+		providerPath, _ := singBoxProviderFilePath(cfg, name)
+		nodes, e := loadProviderCacheNodes(providerPath, item, singBoxProviderTag(item.ID))
+		if e != nil {
 			continue
 		}
 		for _, node := range nodes {
 			key := singBoxEndpointKey(node.Server, node.Port)
-			existing := merged[key]
-			if existing == nil {
-				copy := node
-				copy.ID = singBoxNodeID(node.Server, node.Port)
-				copy.Sources = uniqueNodeSources(copy.Sources)
-				if len(copy.Variants) == 0 {
-					copy.Variants = []singBoxNodeVariant{{
-						Protocol: copy.Protocol, Name: copy.Name, Server: copy.Server, Port: copy.Port,
-						Provider: copy.Provider, OutboundTag: copy.OutboundTag, Outbound: cloneInterfaceMap(copy.Outbound), Sources: uniqueNodeSources(copy.Sources),
-					}}
-				}
-				merged[key] = &copy
-				order = append(order, key)
+			if ex := merged[key]; ex != nil {
+				ex.Sources = uniqueNodeSources(append(ex.Sources, node.Sources...))
+				ex.Variants = appendUniqueNodeVariants(ex.Variants, node.Variants...)
 				continue
 			}
-			existing.Sources = uniqueNodeSources(append(existing.Sources, node.Sources...))
-			if len(node.Variants) > 0 {
-				existing.Variants = appendUniqueNodeVariants(existing.Variants, node.Variants...)
-			} else {
-				existing.Variants = appendUniqueNodeVariants(existing.Variants, singBoxNodeVariant{
-					Protocol: node.Protocol, Name: node.Name, Server: node.Server, Port: node.Port,
-					Provider: node.Provider, OutboundTag: node.OutboundTag, Outbound: cloneInterfaceMap(node.Outbound), Sources: uniqueNodeSources(node.Sources),
-				})
+			copy := node
+			copy.ID = singBoxNodeID(node.Server, node.Port)
+			copy.Sources = uniqueNodeSources(copy.Sources)
+			if len(copy.Variants) == 0 {
+				copy.Variants = []singBoxNodeVariant{{Protocol: copy.Protocol, Name: copy.Name, Server: copy.Server, Port: copy.Port, Provider: copy.Provider, OutboundTag: copy.OutboundTag, Outbound: cloneInterfaceMap(copy.Outbound), Sources: copy.Sources}}
 			}
+			merged[key] = &copy
+			order = append(order, key)
 		}
 	}
 	result := make([]singBoxCachedNode, 0, len(order))
 	for _, key := range order {
-		if item := merged[key]; item != nil {
-			item.Sources = uniqueNodeSources(item.Sources)
-			result = append(result, *item)
+		if node := merged[key]; node != nil {
+			node.Sources = uniqueNodeSources(node.Sources)
+			result = append(result, *node)
 		}
 	}
 	return result, nil
@@ -885,9 +1004,12 @@ func loadProviderCacheNodes(path string, item subscription, providerTag string) 
 	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("解析 Provider 缓存失败: %w", err)
 	}
-
-	result := make([]singBoxCachedNode, 0, len(doc.Outbounds))
-	for _, outbound := range doc.Outbounds {
+	all := doc.Outbounds
+	for _, ep := range doc.Endpoints {
+		all = append(all, ep)
+	}
+	result := make([]singBoxCachedNode, 0, len(all))
+	for _, outbound := range all {
 		typeName := strings.ToLower(stringValue(outbound["type"]))
 		server := stringValue(outbound["server"])
 		port := intFromJSONNumber(outbound["server_port"])
@@ -896,25 +1018,17 @@ func loadProviderCacheNodes(path string, item subscription, providerTag string) 
 		}
 		tag := stringValue(outbound["tag"])
 		if tag == "" {
+			tag = stringValue(outbound["name"])
+		}
+		if tag == "" {
 			continue
 		}
 		name := tag
-		if index := strings.LastIndex(tag, "/"); index >= 0 && index+1 < len(tag) {
-			name = tag[index+1:]
+		if i := strings.LastIndex(tag, "/"); i >= 0 && i+1 < len(tag) {
+			name = tag[i+1:]
 		}
-		rawInput := findRawEndpointForSubscription(item.Content, server, port)
-		source := singBoxNodeSource{
-			SubscriptionID: item.ID, SubscriptionName: item.Name, SubscriptionURL: item.URL,
-			ProviderTag: providerTag, NodeTag: tag, Raw: rawInput,
-		}
-		node := singBoxCachedNode{
-			ID: singBoxNodeID(server, port), Server: server, Port: port, Protocol: typeName,
-			Name: name, Provider: providerTag, OutboundTag: tag, Outbound: cloneInterfaceMap(outbound),
-			Sources: []singBoxNodeSource{source}, Variants: []singBoxNodeVariant{{
-				Protocol: typeName, Name: name, Server: server, Port: port, Provider: providerTag,
-				OutboundTag: tag, Outbound: cloneInterfaceMap(outbound), Sources: []singBoxNodeSource{source},
-			}},
-		}
+		source := singBoxNodeSource{SubscriptionID: item.ID, SubscriptionName: item.Name, SubscriptionURL: item.URL, ProviderTag: providerTag, NodeTag: tag}
+		node := singBoxCachedNode{ID: singBoxNodeID(server, port), Server: server, Port: port, Protocol: typeName, Name: name, Provider: providerTag, OutboundTag: tag, Outbound: cloneInterfaceMap(outbound), Sources: []singBoxNodeSource{source}, Variants: []singBoxNodeVariant{{Protocol: typeName, Name: name, Server: server, Port: port, Provider: providerTag, OutboundTag: tag, Outbound: cloneInterfaceMap(outbound), Sources: []singBoxNodeSource{source}}}}
 		result = append(result, node)
 	}
 	return result, nil
@@ -1162,6 +1276,7 @@ func startSingBoxMixedFallback(parent context.Context, cfg singBoxEngineConfig, 
 		return nil, err
 	}
 	cmd := exec.CommandContext(parent, binary, "run", "-c", configPath)
+	cmd.Dir = singBoxDataDir()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -1200,6 +1315,7 @@ func buildSingBoxRunCommand(parent context.Context, binary, configPath string, l
 		return cmd, "sing-tun", nil
 	}
 	cmd := exec.CommandContext(parent, binary, "run", "-c", configPath)
+	cmd.Dir = singBoxDataDir()
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	return cmd, "mixed", nil
@@ -1329,6 +1445,12 @@ func selectSingBoxOutbound(parent context.Context, runtime *singBoxRuntime, outb
 }
 
 func waitForClashAPI(ctx context.Context, controllerURL, secret string) error {
+	return waitForClashAPIWithContext(ctx, controllerURL, secret, 15*time.Second)
+}
+
+func waitForClashAPIWithContext(parent context.Context, controllerURL, secret string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -1336,8 +1458,8 @@ func waitForClashAPI(ctx context.Context, controllerURL, secret string) error {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, controllerURL+"/proxies", nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+secret)
-			resp, callErr := http.DefaultClient.Do(req)
-			if callErr == nil {
+			resp, e := http.DefaultClient.Do(req)
+			if e == nil {
 				io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 				resp.Body.Close()
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -1345,7 +1467,11 @@ func waitForClashAPI(ctx context.Context, controllerURL, secret string) error {
 				}
 			}
 		}
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
 }
 
@@ -1418,15 +1544,17 @@ func probeThroughSingBox(client *http.Client, testURL string, resolved []net.IP,
 	if err != nil {
 		return singBoxProbeResult{Attempt: attempt, Error: err.Error()}
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := client.Do(req)
 	if err != nil {
 		return singBoxProbeResult{Attempt: attempt, LatencyMS: time.Since(start).Milliseconds(), Error: err.Error()}
 	}
-	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 128<<10))
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	latency := time.Since(start).Milliseconds()
 	probe := singBoxProbeResult{Attempt: attempt, LatencyMS: latency, StatusCode: resp.StatusCode}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		probe.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		return probe
 	}
@@ -1442,30 +1570,79 @@ func probeThroughSingBox(client *http.Client, testURL string, resolved []net.IP,
 
 func measureSingBoxDownload(client *http.Client, testURL string, resolved []net.IP, bytesWanted int64, timeout time.Duration) string {
 	_ = resolved
-	ctx, cancel := context.WithTimeout(context.Background(), timeout*2)
+	_ = bytesWanted
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
 	if err != nil {
 		return ""
 	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ""
 	}
+	buf := make([]byte, 32*1024)
 	start := time.Now()
-	read, err := io.CopyN(io.Discard, resp.Body, bytesWanted)
-	if err != nil && read == 0 {
-		return ""
+	deadline := time.NewTimer(6 * time.Second)
+	defer deadline.Stop()
+	type chunk struct {
+		n   int
+		err error
 	}
+	ch := make(chan chunk, 16)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			n, e := resp.Body.Read(buf)
+			select {
+			case ch <- chunk{n: n, err: e}:
+			case <-ctx.Done():
+				return
+			}
+			if e != nil {
+				return
+			}
+		}
+	}()
+	var total int64
+	select {
+	case <-deadline.C:
+	case c := <-ch:
+		if c.n > 0 {
+			total += int64(c.n)
+		}
+		if c.err == nil {
+			for {
+				select {
+				case <-deadline.C:
+					goto finished
+				case c := <-ch:
+					if c.n > 0 {
+						total += int64(c.n)
+					}
+					if c.err != nil {
+						goto finished
+					}
+				}
+			}
+		}
+	}
+finished:
+	cancel()
+	resp.Body.Close()
+	<-done
 	elapsed := time.Since(start).Seconds()
-	if elapsed <= 0 || read <= 0 {
+	if elapsed <= 0 || total <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("%.2f MB/s", float64(read)/1024.0/1024.0/elapsed)
+	return fmt.Sprintf("%.2f MB/s", float64(total)/1024/1024/elapsed)
 }
 
 func parseTraceIP(content string) string {
@@ -1505,29 +1682,26 @@ func providerRefsForNodes(cfg singBoxEngineConfig, nodes []singBoxCachedNode) []
 }
 
 func providerCacheForTagExists(cfg singBoxEngineConfig, providerTag string) bool {
-	if strings.HasPrefix(providerTag, "sub-") {
-		return true
+	item := subscriptionByProviderTag(providerTag)
+	if item.ID == "" {
+		return false
 	}
-	return false
+	path, e := singBoxProviderFilePath(cfg, item.Name)
+	return e == nil && providerCacheLooksValid(path)
 }
 
 func providerConfigObjects(providerTags []string, cfg singBoxEngineConfig) []interface{} {
 	result := make([]interface{}, 0, len(providerTags))
-	for _, providerTag := range providerTags {
-		path := ""
-		subscriptionID := strings.TrimPrefix(providerTag, "sub-")
-		_ = subscriptionID
-		if item := subscriptionByProviderTag(providerTag); item.ID != "" {
-			if filePath, err := singBoxNodeFilePath(cfg, item.Name); err == nil {
-				path = filePath
-			}
-		}
-		if path == "" {
+	for _, tag := range providerTags {
+		item := subscriptionByProviderTag(tag)
+		if item.ID == "" {
 			continue
 		}
-		result = append(result, map[string]interface{}{
-			"type": "local", "tag": providerTag, "path": path,
-		})
+		path, err := singBoxProviderFilePath(cfg, item.Name)
+		if err != nil {
+			continue
+		}
+		result = append(result, map[string]interface{}{"type": "local", "tag": tag, "path": path})
 	}
 	return result
 }

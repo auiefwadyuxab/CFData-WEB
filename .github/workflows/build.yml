@@ -59,6 +59,7 @@ jobs:
       - name: Validate subscription manager integration
         run: |
           test -s combined_refactor/subscriptions.go
+          test -s singbox-r-template.json
           grep -Fq '"subscription_list":' combined_refactor/server.go
           grep -Fq '"subscription_get":' combined_refactor/server.go
           grep -Fq '"subscription_save":' combined_refactor/server.go
@@ -238,30 +239,38 @@ jobs:
           chmod +x "$candidate"
           echo "Selected binary: $candidate"
           file "$candidate"
+          file "$candidate" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'
 
-          # GitHub's Ubuntu runner is x86_64, while this binary targets Android ARM64.
-          # Architecture is validated with file(1); never try to execute it here.
+          mkdir -p app/src/main/assets
+          cp "$candidate" app/src/main/assets/sing-box-android-arm64
+          chmod +x app/src/main/assets/sing-box-android-arm64
+
           archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
           binary_sha256="$(sha256sum "$candidate" | awk '{print $1}')"
           echo "Archive SHA256: ${archive_sha256}"
           echo "Binary SHA256: ${binary_sha256}"
+          echo "Bundled Android ARM64 sing-box core (validated only; never executed on x86_64 runner)."
 
-          mkdir -p app/src/main/assets
-          cp "$candidate" app/src/main/assets/sing-box-android-arm64
+          test -s singbox-engine.json
+          test -s singbox-r-template.json
+          python3 - <<'PY'
+          import json
+          for path in ("singbox-engine.json", "singbox-r-template.json"):
+              with open(path, "r", encoding="utf-8") as f:
+                  json.load(f)
+              print("JSON OK:", path)
+          PY
+          cp singbox-engine.json app/src/main/assets/singbox-engine.json
+          cp singbox-r-template.json app/src/main/assets/singbox-r-template.json
+          chmod 644 app/src/main/assets/sing-box-android-arm64
           cat > app/src/main/assets/sing-box-android-arm64.version <<EOF
           archive=$(basename "$archive")
           archive_sha256=${archive_sha256}
           binary_sha256=${binary_sha256}
           architecture=arm64-v8a
           EOF
-          if [ -f singbox-engine.json ]; then
-            cp singbox-engine.json app/src/main/assets/singbox-engine.json
-          else
-            echo "未找到项目根目录 singbox-engine.json，无法提供默认 Provider 配置。" >&2
-            exit 1
-          fi
-          chmod 644 app/src/main/assets/sing-box-android-arm64 app/src/main/assets/sing-box-android-arm64.version
-          ls -lh app/src/main/assets/sing-box-android-arm64*
+          chmod 644 app/src/main/assets/sing-box-android-arm64.version
+          ls -lh app/src/main/assets/sing-box-android-arm64 app/src/main/assets/singbox-engine.json app/src/main/assets/singbox-r-template.json
 
       - name: Build Android backend
         working-directory: combined_refactor

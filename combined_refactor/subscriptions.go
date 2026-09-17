@@ -1,13 +1,9 @@
 package main
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,10 +12,7 @@ import (
 	"time"
 )
 
-const (
-	subscriptionStoreFile = "subscriptions.json"
-	subscriptionMaxBytes  = 32 << 20 // 32 MiB, measured after optional gzip decompression.
-)
+const subscriptionStoreFile = "subscriptions.json"
 
 var subscriptionStore struct {
 	sync.Mutex
@@ -32,7 +25,7 @@ type subscription struct {
 	Name          string            `json:"name"`
 	URL           string            `json:"url"`
 	Headers       map[string]string `json:"headers,omitempty"`
-	Content       string            `json:"content,omitempty"`
+	Content       string            `json:"content,omitempty"` // legacy compatibility only
 	Status        string            `json:"status"`
 	Error         string            `json:"error,omitempty"`
 	StatusCode    int               `json:"statusCode,omitempty"`
@@ -41,6 +34,9 @@ type subscription struct {
 	UpdatedAt     string            `json:"updatedAt,omitempty"`
 	CreatedAt     string            `json:"createdAt"`
 	Format        string            `json:"format,omitempty"`
+	ConfigPath    string            `json:"configPath,omitempty"`
+	ProviderPath  string            `json:"providerPath,omitempty"`
+	NodeCount     int               `json:"nodeCount,omitempty"`
 }
 
 type subscriptionSaveRequest struct {
@@ -49,11 +45,9 @@ type subscriptionSaveRequest struct {
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
 }
-
 type subscriptionUpdateRequest struct {
 	ID string `json:"id"`
 }
-
 type subscriptionIDRequest struct {
 	ID string `json:"id"`
 }
@@ -72,35 +66,27 @@ type subscriptionSummary struct {
 	CreatedAt     string            `json:"createdAt"`
 	Format        string            `json:"format,omitempty"`
 	HasContent    bool              `json:"hasContent"`
+	ConfigPath    string            `json:"configPath,omitempty"`
+	ProviderPath  string            `json:"providerPath,omitempty"`
+	NodeCount     int               `json:"nodeCount,omitempty"`
 }
 
 func subscriptionFilePath() string {
-	// Android stores the native backend in the APK's nativeLibraryDir, which is
-	// read-only at runtime. MainActivity supplies the app-private writable
-	// directory through CFDATA_DATA_DIR when launching the backend.
 	if dataDir := strings.TrimSpace(os.Getenv("CFDATA_DATA_DIR")); dataDir != "" {
 		return filepath.Join(dataDir, subscriptionStoreFile)
 	}
-
-	// The Android launcher also sets the backend working directory to
-	// Context.getFilesDir(), so use the current working directory as a safe
-	// fallback for Android and other callers that explicitly set their cwd.
-	if workingDir, err := os.Getwd(); err == nil && strings.TrimSpace(workingDir) != "" {
-		return filepath.Join(workingDir, subscriptionStoreFile)
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		return filepath.Join(cwd, subscriptionStoreFile)
 	}
-
-	// Preserve the original desktop/server fallback if cwd cannot be read.
 	return filepath.Join(filepath.Dir(os.Args[0]), subscriptionStoreFile)
 }
 
 func ensureSubscriptionStoreLoaded() error {
 	subscriptionStore.Lock()
 	defer subscriptionStore.Unlock()
-
 	if subscriptionStore.Loaded {
 		return nil
 	}
-
 	raw, err := os.ReadFile(subscriptionFilePath())
 	if os.IsNotExist(err) {
 		subscriptionStore.Items = []subscription{}
@@ -110,18 +96,15 @@ func ensureSubscriptionStoreLoaded() error {
 	if err != nil {
 		return err
 	}
-
 	if len(strings.TrimSpace(string(raw))) == 0 {
 		subscriptionStore.Items = []subscription{}
 		subscriptionStore.Loaded = true
 		return nil
 	}
-
 	var items []subscription
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return fmt.Errorf("解析 %s 失败: %w", subscriptionStoreFile, err)
 	}
-
 	if items == nil {
 		items = []subscription{}
 	}
@@ -130,10 +113,9 @@ func ensureSubscriptionStoreLoaded() error {
 		items[i].URL = strings.TrimSpace(items[i].URL)
 		items[i].Headers = normalizeSubscriptionHeaders(items[i].Headers)
 		if items[i].Status == "" {
-			items[i].Status = "未更新"
+			items[i].Status = "未同步"
 		}
 	}
-
 	subscriptionStore.Items = items
 	subscriptionStore.Loaded = true
 	return nil
@@ -144,226 +126,68 @@ func saveSubscriptionStoreLocked() error {
 	if err != nil {
 		return err
 	}
-
-	// Reuse the project's atomic file writer when available.  It writes the
-	// complete JSON to a temporary file and replaces the destination safely.
 	return atomicWriteFile(subscriptionFilePath(), data, 0644)
 }
-
-func subscriptionSummaryOf(item subscription) subscriptionSummary {
-	return subscriptionSummary{
-		ID:            item.ID,
-		Name:          item.Name,
-		URL:           item.URL,
-		Headers:       cloneSubscriptionHeaders(item.Headers),
-		Status:        item.Status,
-		Error:         item.Error,
-		StatusCode:    item.StatusCode,
-		ContentType:   item.ContentType,
-		ContentLength: item.ContentLength,
-		UpdatedAt:     item.UpdatedAt,
-		CreatedAt:     item.CreatedAt,
-		Format:        item.Format,
-		HasContent:    strings.TrimSpace(item.Content) != "",
-	}
-}
-
-func cloneSubscriptionHeaders(headers map[string]string) map[string]string {
-	if len(headers) == 0 {
+func cloneSubscriptionHeaders(h map[string]string) map[string]string {
+	if len(h) == 0 {
 		return nil
 	}
-	result := make(map[string]string, len(headers))
-	for k, v := range headers {
-		result[k] = v
+	r := make(map[string]string, len(h))
+	for k, v := range h {
+		r[k] = v
 	}
-	return result
+	return r
 }
-
+func normalizeSubscriptionHeaders(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	r := make(map[string]string, len(h))
+	for k, v := range h {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if k != "" && v != "" {
+			r[k] = v
+		}
+	}
+	if len(r) == 0 {
+		return nil
+	}
+	return r
+}
+func subscriptionSummaryOf(item subscription) subscriptionSummary {
+	return subscriptionSummary{ID: item.ID, Name: item.Name, URL: item.URL, Headers: cloneSubscriptionHeaders(item.Headers), Status: item.Status, Error: item.Error, StatusCode: item.StatusCode, ContentType: item.ContentType, ContentLength: item.ContentLength, UpdatedAt: item.UpdatedAt, CreatedAt: item.CreatedAt, Format: item.Format, HasContent: strings.TrimSpace(item.Content) != "", ConfigPath: item.ConfigPath, ProviderPath: item.ProviderPath, NodeCount: item.NodeCount}
+}
 func listSubscriptions() ([]subscriptionSummary, error) {
 	if err := ensureSubscriptionStoreLoaded(); err != nil {
 		return nil, err
 	}
-
 	subscriptionStore.Lock()
 	defer subscriptionStore.Unlock()
-
-	result := make([]subscriptionSummary, 0, len(subscriptionStore.Items))
+	r := make([]subscriptionSummary, 0, len(subscriptionStore.Items))
 	for _, item := range subscriptionStore.Items {
-		result = append(result, subscriptionSummaryOf(item))
+		r = append(r, subscriptionSummaryOf(item))
 	}
-	return result, nil
+	return r, nil
 }
-
 func getSubscription(id string) (subscription, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return subscription{}, fmt.Errorf("缺少订阅 ID")
 	}
-
 	if err := ensureSubscriptionStoreLoaded(); err != nil {
 		return subscription{}, err
 	}
-
 	subscriptionStore.Lock()
 	defer subscriptionStore.Unlock()
-
 	for _, item := range subscriptionStore.Items {
 		if item.ID == id {
 			item.Headers = cloneSubscriptionHeaders(item.Headers)
 			return item, nil
 		}
 	}
-
 	return subscription{}, fmt.Errorf("订阅不存在: %s", id)
 }
-
-func normalizeSubscriptionHeaders(headers map[string]string) map[string]string {
-	if len(headers) == 0 {
-		return nil
-	}
-
-	result := make(map[string]string, len(headers))
-	for k, v := range headers {
-		k = strings.TrimSpace(k)
-		v = strings.TrimSpace(v)
-		if k == "" || v == "" {
-			continue
-		}
-		result[k] = v
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
-func subscriptionRequestHeaders(headers map[string]string) map[string]string {
-	result := map[string]string{
-		"User-Agent":      "v2rayNG/2.2.6",
-		"Connection":      "close",
-		"Accept-Encoding": "gzip",
-	}
-	for k, v := range normalizeSubscriptionHeaders(headers) {
-		result[k] = v
-	}
-	return result
-}
-
-func validateSubscriptionURL(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return fmt.Errorf("订阅 URL 无效: %w", err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("订阅 URL 必须使用 http 或 https")
-	}
-	if parsed.Host == "" {
-		return fmt.Errorf("订阅 URL 缺少主机名")
-	}
-	return nil
-}
-
-func detectSubscriptionFormat(content string) string {
-	text := strings.TrimSpace(strings.TrimPrefix(content, "\uFEFF"))
-	if text == "" {
-		return "empty"
-	}
-
-	if strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[") {
-		var parsed interface{}
-		if json.Unmarshal([]byte(text), &parsed) == nil {
-			return "json"
-		}
-	}
-
-	if strings.Contains(text, "://") {
-		return "uri"
-	}
-
-	compact := strings.Map(func(r rune) rune {
-		switch r {
-		case ' ', '\t', '\r', '\n':
-			return -1
-		default:
-			return r
-		}
-	}, text)
-
-	if decoded, err := base64.StdEncoding.DecodeString(compact); err == nil {
-		decodedText := strings.TrimSpace(string(decoded))
-		if strings.Contains(decodedText, "://") {
-			return "base64-uri"
-		}
-	}
-
-	return "text"
-}
-
-func fetchSubscription(ctx context.Context, target subscription) (subscription, error) {
-	if err := validateSubscriptionURL(target.URL); err != nil {
-		return target, err
-	}
-
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		strings.TrimSpace(target.URL),
-		nil,
-	)
-	if err != nil {
-		return target, err
-	}
-
-	for k, v := range subscriptionRequestHeaders(target.Headers) {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := upstreamHTTPClient.Do(req)
-	if err != nil {
-		return target, err
-	}
-	defer resp.Body.Close()
-
-	target.StatusCode = resp.StatusCode
-	target.ContentType = resp.Header.Get("Content-Type")
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		message := strings.TrimSpace(string(body))
-		if message != "" {
-			return target, fmt.Errorf("订阅请求失败: %s: %s", resp.Status, message)
-		}
-		return target, fmt.Errorf("订阅请求失败: %s", resp.Status)
-	}
-
-	var reader io.Reader = resp.Body
-	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
-		gzipReader, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return target, fmt.Errorf("gzip 解压失败: %w", err)
-		}
-		defer gzipReader.Close()
-		reader = gzipReader
-	}
-
-	data, err := io.ReadAll(io.LimitReader(reader, subscriptionMaxBytes+1))
-	if err != nil {
-		return target, err
-	}
-	if len(data) > subscriptionMaxBytes {
-		return target, fmt.Errorf("订阅内容超过 %d MiB，已拒绝保存", subscriptionMaxBytes>>20)
-	}
-
-	target.Content = string(data)
-	target.ContentLength = int64(len(data))
-	target.UpdatedAt = time.Now().Format(time.RFC3339)
-	target.Status = "success"
-	target.Error = ""
-	target.Format = detectSubscriptionFormat(target.Content)
-
-	return target, nil
-}
-
 func validateSubscriptionName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -374,7 +198,21 @@ func validateSubscriptionName(name string) error {
 	}
 	return nil
 }
-
+func validateSubscriptionURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	u, err := urlParseSafe(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("订阅 URL 必须使用 http 或 https")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("订阅 URL 缺少主机名")
+	}
+	return nil
+}
+func urlParseSafe(raw string) (*url.URL, error) { return url.Parse(strings.TrimSpace(raw)) }
 func subscriptionNameExistsLocked(name, exceptID string) bool {
 	for _, item := range subscriptionStore.Items {
 		if item.ID == exceptID {
@@ -386,62 +224,56 @@ func subscriptionNameExistsLocked(name, exceptID string) bool {
 	}
 	return false
 }
-
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
 func createOrUpdateSubscription(req subscriptionSaveRequest) (subscriptionSummary, error) {
 	if err := validateSubscriptionURL(req.URL); err != nil {
 		return subscriptionSummary{}, err
 	}
-
 	name := strings.TrimSpace(req.Name)
 	if err := validateSubscriptionName(name); err != nil {
 		return subscriptionSummary{}, err
 	}
 	urlText := strings.TrimSpace(req.URL)
 	headers := normalizeSubscriptionHeaders(req.Headers)
-
 	if err := ensureSubscriptionStoreLoaded(); err != nil {
 		return subscriptionSummary{}, err
 	}
-
 	subscriptionStore.Lock()
 	defer subscriptionStore.Unlock()
-
-	if subscriptionNameExistsLocked(name, strings.TrimSpace(req.ID)) {
+	exceptID := strings.TrimSpace(req.ID)
+	if subscriptionNameExistsLocked(name, exceptID) {
 		return subscriptionSummary{}, fmt.Errorf("订阅名称已存在: %s", name)
 	}
-
 	now := time.Now().Format(time.RFC3339)
-
-	if strings.TrimSpace(req.ID) == "" {
-		item := subscription{
-			ID:        fmt.Sprintf("sub-%d", time.Now().UnixNano()),
-			Name:      name,
-			URL:       urlText,
-			Headers:   headers,
-			Status:    "未更新",
-			CreatedAt: now,
-		}
-
+	if exceptID == "" {
+		item := subscription{ID: fmt.Sprintf("sub-%d", time.Now().UnixNano()), Name: name, URL: urlText, Headers: headers, Status: "未同步", CreatedAt: now}
 		subscriptionStore.Items = append(subscriptionStore.Items, item)
 		if err := saveSubscriptionStoreLocked(); err != nil {
 			return subscriptionSummary{}, err
 		}
 		return subscriptionSummaryOf(item), nil
 	}
-
-	id := strings.TrimSpace(req.ID)
 	for i := range subscriptionStore.Items {
-		if subscriptionStore.Items[i].ID != id {
+		if subscriptionStore.Items[i].ID != exceptID {
 			continue
 		}
-
 		item := &subscriptionStore.Items[i]
-		urlChanged := item.URL != urlText
+		changed := item.URL != urlText || !sameStringMap(item.Headers, headers) || !strings.EqualFold(item.Name, name)
 		item.Name = name
 		item.URL = urlText
 		item.Headers = headers
-		if urlChanged {
-			item.Status = "未更新"
+		if changed {
+			item.Status = "未同步"
 			item.Error = ""
 			item.StatusCode = 0
 			item.ContentType = ""
@@ -449,115 +281,61 @@ func createOrUpdateSubscription(req subscriptionSaveRequest) (subscriptionSummar
 			item.UpdatedAt = ""
 			item.Format = ""
 			item.Content = ""
+			item.ConfigPath = ""
+			item.ProviderPath = ""
+			item.NodeCount = 0
 		}
-
 		if err := saveSubscriptionStoreLocked(); err != nil {
 			return subscriptionSummary{}, err
 		}
 		return subscriptionSummaryOf(*item), nil
 	}
-
-	return subscriptionSummary{}, fmt.Errorf("订阅不存在: %s", id)
+	return subscriptionSummary{}, fmt.Errorf("订阅不存在: %s", exceptID)
 }
-
 func updateSubscription(ctx context.Context, id string) (subscriptionSummary, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return subscriptionSummary{}, fmt.Errorf("缺少订阅 ID")
 	}
-
-	if err := ensureSubscriptionStoreLoaded(); err != nil {
-		return subscriptionSummary{}, err
-	}
-
 	item, err := getSubscription(id)
 	if err != nil {
 		return subscriptionSummary{}, err
 	}
-
-	// Mark the item busy before doing network I/O, but do not hold the store
-	// mutex while waiting on the remote subscription server.
-	subscriptionStore.Lock()
-	found := false
-	for i := range subscriptionStore.Items {
-		if subscriptionStore.Items[i].ID == id {
-			subscriptionStore.Items[i].Status = "更新中"
-			subscriptionStore.Items[i].Error = ""
-			found = true
-			break
-		}
-	}
-	if !found {
-		subscriptionStore.Unlock()
-		return subscriptionSummary{}, fmt.Errorf("订阅不存在: %s", id)
-	}
-	if err := saveSubscriptionStoreLocked(); err != nil {
-		subscriptionStore.Unlock()
-		return subscriptionSummary{}, err
-	}
-	subscriptionStore.Unlock()
-
-	updated, fetchErr := fetchSubscription(ctx, item)
-
-	subscriptionStore.Lock()
-	defer subscriptionStore.Unlock()
-
-	for i := range subscriptionStore.Items {
-		if subscriptionStore.Items[i].ID != id {
-			continue
-		}
-
-		if fetchErr != nil {
-			subscriptionStore.Items[i].Status = "error"
-			subscriptionStore.Items[i].Error = fetchErr.Error()
-			if err := saveSubscriptionStoreLocked(); err != nil {
-				return subscriptionSummary{}, err
-			}
-			return subscriptionSummaryOf(subscriptionStore.Items[i]), fetchErr
-		}
-
-		// Keep the record's creation metadata and identity controlled by the
-		// stored entry; only replace fetched/remote-related fields.
-		updated.ID = subscriptionStore.Items[i].ID
-		updated.CreatedAt = subscriptionStore.Items[i].CreatedAt
-		updated.Name = subscriptionStore.Items[i].Name
-		updated.URL = subscriptionStore.Items[i].URL
-		updated.Headers = cloneSubscriptionHeaders(subscriptionStore.Items[i].Headers)
-		subscriptionStore.Items[i] = updated
-
-		if err := saveSubscriptionStoreLocked(); err != nil {
-			return subscriptionSummary{}, err
-		}
-		return subscriptionSummaryOf(subscriptionStore.Items[i]), nil
-	}
-
-	return subscriptionSummary{}, fmt.Errorf("更新完成后订阅不存在: %s", id)
+	singBoxSyncMu.Lock()
+	defer singBoxSyncMu.Unlock()
+	return syncOneSingBoxSubscription(ctx, item, true)
 }
-
 func deleteSubscription(id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return fmt.Errorf("缺少订阅 ID")
 	}
-
 	if err := ensureSubscriptionStoreLoaded(); err != nil {
 		return err
 	}
-
+	removedName := ""
 	subscriptionStore.Lock()
-	defer subscriptionStore.Unlock()
-
 	for i := range subscriptionStore.Items {
 		if subscriptionStore.Items[i].ID != id {
 			continue
 		}
-
-		subscriptionStore.Items = append(
-			subscriptionStore.Items[:i],
-			subscriptionStore.Items[i+1:]...,
-		)
-		return saveSubscriptionStoreLocked()
+		removedName = subscriptionStore.Items[i].Name
+		subscriptionStore.Items = append(subscriptionStore.Items[:i], subscriptionStore.Items[i+1:]...)
+		err := saveSubscriptionStoreLocked()
+		subscriptionStore.Unlock()
+		if err != nil {
+			return err
+		}
+		if cfg, cfgErr := loadSingBoxEngineConfig(); cfgErr == nil {
+			if dir, dirErr := singBoxSubscriptionDir(cfg, removedName); dirErr == nil {
+				_ = os.RemoveAll(dir)
+			}
+			if path, pathErr := singBoxSubscriptionConfigPath(cfg, removedName); pathErr == nil {
+				_ = os.Remove(path)
+			}
+		}
+		return nil
 	}
-
+	subscriptionStore.Unlock()
 	return fmt.Errorf("订阅不存在: %s", id)
 }
