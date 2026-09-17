@@ -47,6 +47,7 @@ public class MainActivity extends Activity {
     private static final String SINGBOX_ASSET = "sing-box-android-arm64";
     private static final String SINGBOX_FILE = "sing-box-android-arm64";
     private static final String SINGBOX_VERSION_ASSET = "sing-box-android-arm64.version";
+    private static final String SINGBOX_CONFIG_ASSET = "singbox-engine.json";
     private static final String SINGBOX_UI_ASSET = "singbox-ui.js";
     private static final int REQUEST_CREATE_DOCUMENT = 1001;
     private static final int REQUEST_FILE_CHOOSER = 1002;
@@ -225,6 +226,7 @@ public class MainActivity extends Activity {
                 File backend = prepareBackendBinary();
                 setLoadingMessage("正在准备 sing-box 核心...");
                 File singBox = prepareSingBoxBinary();
+                prepareSingBoxConfig();
                 ProcessBuilder builder = new ProcessBuilder(
                         backend.getAbsolutePath(),
                         "-host", "127.0.0.1",
@@ -293,6 +295,24 @@ public class MainActivity extends Activity {
         throw new IOException("未找到内置后端: " + nativeBackend.getAbsolutePath());
     }
 
+    private void prepareSingBoxConfig() throws IOException {
+        File target = new File(getFilesDir(), "singbox-engine.json");
+        if (target.isFile() && target.length() > 0) {
+            return;
+        }
+        try (java.io.InputStream in = getAssets().open(SINGBOX_CONFIG_ASSET);
+             java.io.FileOutputStream out = new java.io.FileOutputStream(target, false)) {
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            out.flush();
+        } catch (IOException e) {
+            throw new IOException("未找到内置 sing-box 默认配置资源: " + SINGBOX_CONFIG_ASSET, e);
+        }
+    }
+
     private File prepareSingBoxBinary() throws IOException {
         File target = new File(getFilesDir(), SINGBOX_FILE);
         File versionFile = new File(getFilesDir(), SINGBOX_FILE + ".version");
@@ -304,14 +324,8 @@ public class MainActivity extends Activity {
                 installedVersion = "";
             }
         }
-        String bundledVersion = "latest-reF1nd";
-        try {
-            bundledVersion = loadAssetText(SINGBOX_VERSION_ASSET).trim();
-            if (bundledVersion.isEmpty()) bundledVersion = "latest-reF1nd";
-        } catch (IOException ignored) {
-            // Older build artifacts may not contain a version marker. The binary
-            // itself is still copied and a generic marker is stored.
-        }
+        String bundledVersion = loadAssetText(SINGBOX_VERSION_ASSET).trim();
+        if (bundledVersion.isEmpty()) bundledVersion = "latest-reF1nd";
         if (!target.isFile() || !bundledVersion.equals(installedVersion) || target.length() < 1024) {
             try (java.io.InputStream in = getAssets().open(SINGBOX_ASSET);
                  java.io.FileOutputStream out = new java.io.FileOutputStream(target, false)) {

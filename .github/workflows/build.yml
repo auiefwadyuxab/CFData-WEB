@@ -196,35 +196,38 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
 
-          archives=(
-            singboxr*.zip
-            sing-boxr*.zip
-            singbox*.zip
-            sing-box*.zip
-          )
-          if [ "${#archives[@]}" -eq 0 ]; then
-            echo "未找到 reF1nd sing-box Android ARM64 二进制 ZIP。请将最新 singboxr ZIP 放在项目根目录。" >&2
-            exit 1
+          # The project convention is a single root-level archive named sing-box.zip.
+          # Do not execute the Android ARM64 binary on the x86_64 GitHub runner.
+          archive="sing-box.zip"
+          if [ ! -f "$archive" ]; then
+            archives=(singboxr*.zip sing-boxr*.zip singbox*.zip sing-box*.zip)
+            if [ "${#archives[@]}" -eq 0 ]; then
+              echo "未找到 sing-box.zip。请把最新 reF1nd Android ARM64 核心 ZIP 放在项目根目录，并命名为 sing-box.zip。" >&2
+              exit 1
+            fi
+            archive="$(printf '%s\n' "${archives[@]}" | xargs -r ls -1t | head -n 1)"
           fi
+          [ -f "$archive" ] || { echo "无法选择 sing-box 核心 ZIP。" >&2; exit 1; }
+          echo "Using sing-box archive: ${archive}"
 
-          archive="$(printf '%s\n' "${archives[@]}" | xargs -r ls -1t | head -n 1)"
-          if [ -z "$archive" ] || [ ! -f "$archive" ]; then
-            echo "无法选择 singboxr ZIP。" >&2
-            exit 1
-          fi
-          echo "Using newest sing-box archive: ${archive}"
           extract_dir="$RUNNER_TEMP/cfdata-singboxr"
           rm -rf "$extract_dir"
           mkdir -p "$extract_dir"
           unzip -q "$archive" -d "$extract_dir"
 
           candidate=""
-          while IFS= read -r -d '' file; do
-            if file "$file" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'; then
-              candidate="$file"
-              break
-            fi
-          done < <(find "$extract_dir" -type f -print0)
+          # Prefer the expected file name, then fall back to any ARM64 ELF.
+          expected="$extract_dir/sing-box"
+          if [ -f "$expected" ] && file "$expected" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'; then
+            candidate="$expected"
+          else
+            while IFS= read -r -d '' file_path; do
+              if file "$file_path" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'; then
+                candidate="$file_path"
+                break
+              fi
+            done < <(find "$extract_dir" -type f -print0)
+          fi
 
           if [ -z "$candidate" ]; then
             echo "ZIP 中没有检测到 Android ARM64 ELF 二进制。" >&2
@@ -234,16 +237,29 @@ jobs:
 
           chmod +x "$candidate"
           echo "Selected binary: $candidate"
-          version_output="$($candidate version 2>&1 || $candidate --version 2>&1 || true)"
-          echo "$version_output"
-          if ! printf '%s\n' "$version_output" | grep -Eq 'sing-box|1\.(1[5-9]|[2-9][0-9])'; then
-            echo "无法确认 sing-box 版本，拒绝将未知文件打包进 APK。" >&2
-            exit 1
-          fi
+          file "$candidate"
+
+          # GitHub's Ubuntu runner is x86_64, while this binary targets Android ARM64.
+          # Architecture is validated with file(1); never try to execute it here.
+          archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          binary_sha256="$(sha256sum "$candidate" | awk '{print $1}')"
+          echo "Archive SHA256: ${archive_sha256}"
+          echo "Binary SHA256: ${binary_sha256}"
 
           mkdir -p app/src/main/assets
           cp "$candidate" app/src/main/assets/sing-box-android-arm64
-          printf '%s\n' "$version_output" | head -n 1 > app/src/main/assets/sing-box-android-arm64.version
+          cat > app/src/main/assets/sing-box-android-arm64.version <<EOF
+          archive=$(basename "$archive")
+          archive_sha256=${archive_sha256}
+          binary_sha256=${binary_sha256}
+          architecture=arm64-v8a
+          EOF
+          if [ -f singbox-engine.json ]; then
+            cp singbox-engine.json app/src/main/assets/singbox-engine.json
+          else
+            echo "未找到项目根目录 singbox-engine.json，无法提供默认 Provider 配置。" >&2
+            exit 1
+          fi
           chmod 644 app/src/main/assets/sing-box-android-arm64 app/src/main/assets/sing-box-android-arm64.version
           ls -lh app/src/main/assets/sing-box-android-arm64*
 
