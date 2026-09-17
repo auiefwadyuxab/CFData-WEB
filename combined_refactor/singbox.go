@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -799,7 +800,10 @@ func syncOneSingBoxSubscription(ctx context.Context, item subscription, force bo
 	logPath := strings.TrimSuffix(bootstrapPath, ".json") + ".log"
 	defer os.Remove(bootstrapPath)
 	defer os.Remove(logPath)
-	bootstrap := map[string]interface{}{"log": map[string]interface{}{"disabled": false, "level": "info", "output": logPath, "timestamp": true}, "providers": []interface{}{map[string]interface{}{"tag": "Provider1", "type": "remote", "url": strings.TrimSpace(item.URL), "exclude": cfg.ProviderExclude, "path": relProvider, "update_interval": cfg.ProviderUpdateInterval, "health_check": cfg.ProviderHealthCheck}}, "outbounds": []interface{}{map[string]interface{}{"tag": "direct", "type": "direct"}}, "route": map[string]interface{}{"final": "direct", "auto_detect_interface": true}}
+	// Provider 更新只需要最小配置。尤其在 Android CLI 下，不要把完整 R 配置里的
+	// eBPF / auto_detect_interface / rule-set 网络监视一起带进来；这些功能会触发
+	// NetworkUpdateMonitor，而普通 Android App UID 无权创建 netlink socket。
+	bootstrap := map[string]interface{}{"log": map[string]interface{}{"disabled": false, "level": "info", "output": logPath, "timestamp": true}, "providers": []interface{}{map[string]interface{}{"tag": "Provider1", "type": "remote", "url": strings.TrimSpace(item.URL), "exclude": cfg.ProviderExclude, "path": relProvider, "update_interval": cfg.ProviderUpdateInterval, "health_check": cfg.ProviderHealthCheck}}, "outbounds": []interface{}{map[string]interface{}{"tag": "direct", "type": "direct"}}, "route": map[string]interface{}{"final": "direct"}}
 	bd, _ := json.MarshalIndent(bootstrap, "", "  ")
 	if err := os.WriteFile(bootstrapPath, bd, 0600); err != nil {
 		return subscriptionSummary{}, err
@@ -815,10 +819,11 @@ func syncOneSingBoxSubscription(ctx context.Context, item subscription, force bo
 	if err != nil {
 		return subscriptionSummary{}, err
 	}
-	cmd := exec.CommandContext(ctx, binary, "run", "-c", bootstrapPath)
-	cmd.Dir = root
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd, err := buildSingBoxCommand(ctx, binary, []string{"run", "-c", bootstrapPath}, root, logFile)
+	if err != nil {
+		logFile.Close()
+		return subscriptionSummary{}, fmt.Errorf("启动 Provider 所需 sing-box 失败: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		return subscriptionSummary{}, fmt.Errorf("启动 sing-box Provider 失败: %w", err)
@@ -864,8 +869,10 @@ func syncOneSingBoxSubscription(ctx context.Context, item subscription, force bo
 }
 
 func runSingBoxCheck(ctx context.Context, binary, configPath, workDir string) error {
-	cmd := exec.CommandContext(ctx, binary, "check", "-c", configPath)
-	cmd.Dir = workDir
+	cmd, err := buildSingBoxCommand(ctx, binary, []string{"check", "-c", configPath}, workDir, nil)
+	if err != nil {
+		return err
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
@@ -1275,10 +1282,13 @@ func startSingBoxMixedFallback(parent context.Context, cfg singBoxEngineConfig, 
 		_ = os.Remove(configPath)
 		return nil, err
 	}
-	cmd := exec.CommandContext(parent, binary, "run", "-c", configPath)
-	cmd.Dir = singBoxDataDir()
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd, err := buildSingBoxCommand(parent, binary, []string{"run", "-c", configPath}, singBoxDataDir(), logFile)
+	if err != nil {
+		logFile.Close()
+		_ = os.Remove(configPath)
+		_ = os.Remove(logPath)
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		_ = os.Remove(configPath)
@@ -1299,8 +1309,38 @@ func startSingBoxMixedFallback(parent context.Context, cfg singBoxEngineConfig, 
 	return runtime, nil
 }
 
+func buildSingBoxCommand(parent context.Context, binary string, args []string, workDir string, logFile *os.File) (*exec.Cmd, error) {
+	useRoot := runtime.GOOS == "android"
+	if useRoot {
+		suPath := findSuBinary()
+		if suPath == "" {
+			return nil, errors.New("Android CLI sing-box 需要 Root：未找到 su")
+		}
+		if !canUseRootSu(suPath) {
+			return nil, errors.New("Android CLI sing-box 需要 Root：su 没有获得 UID 0，请给 CFData-WEB 授予 Root 权限")
+		}
+		command := "cd " + shellQuote(workDir) + " && exec " + shellQuote(binary)
+		for _, arg := range args {
+			command += " " + shellQuote(arg)
+		}
+		cmd := exec.CommandContext(parent, suPath, "-c", command)
+		if logFile != nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+		}
+		return cmd, nil
+	}
+	cmd := exec.CommandContext(parent, binary, args...)
+	cmd.Dir = workDir
+	if logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
+	return cmd, nil
+}
+
 func buildSingBoxRunCommand(parent context.Context, binary, configPath string, logFile *os.File, preferRoot bool) (*exec.Cmd, string, error) {
-	if preferRoot {
+	if preferRoot || runtime.GOOS == "android" {
 		suPath := findSuBinary()
 		if suPath == "" {
 			return nil, "sing-tun", errors.New("未找到 su；sing-tun TUN 需要 root，mixed fallback 将在外层处理")
@@ -1308,11 +1348,15 @@ func buildSingBoxRunCommand(parent context.Context, binary, configPath string, l
 		if !canUseRootSu(suPath) {
 			return nil, "sing-tun", errors.New("当前 su 无法获得 root 权限")
 		}
-		command := shellQuote(binary) + " run -c " + shellQuote(configPath)
-		cmd := exec.CommandContext(parent, suPath, "-c", "exec "+command)
+		command := "cd " + shellQuote(singBoxDataDir()) + " && exec " + shellQuote(binary) + " run -c " + shellQuote(configPath)
+		cmd := exec.CommandContext(parent, suPath, "-c", command)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
-		return cmd, "sing-tun", nil
+		mode := "sing-tun"
+		if !preferRoot {
+			mode = "mixed-root"
+		}
+		return cmd, mode, nil
 	}
 	cmd := exec.CommandContext(parent, binary, "run", "-c", configPath)
 	cmd.Dir = singBoxDataDir()
@@ -1869,7 +1913,7 @@ func findSingBoxBinary() (string, error) {
 }
 
 func findSuBinary() string {
-	for _, path := range []string{"/system/bin/su", "/system/xbin/su", "/sbin/su"} {
+	for _, path := range []string{"/system/bin/su", "/system/xbin/su", "/sbin/su", "/data/adb/ksu/bin/su"} {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
 			return path
 		}
