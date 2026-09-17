@@ -44,9 +44,7 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int PORT = 13335;
     private static final String BACKEND_LIBRARY = "libcfdata.so";
-    private static final String SINGBOX_ASSET = "sing-box-android-arm64";
-    private static final String SINGBOX_FILE = "sing-box-android-arm64";
-    private static final String SINGBOX_VERSION_ASSET = "sing-box-android-arm64.version";
+    private static final String SINGBOX_NATIVE_LIBRARY = "libsingbox.so";
     private static final String SINGBOX_CONFIG_ASSET = "singbox-engine.json";
     private static final String SINGBOX_TEMPLATE_ASSET = "singbox-r-template.json";
     private static final String SINGBOX_UI_ASSET = "singbox-ui.js";
@@ -334,41 +332,19 @@ public class MainActivity extends Activity {
     }
 
     private File prepareSingBoxBinary() throws IOException {
-        File target = new File(getFilesDir(), SINGBOX_FILE);
-        File versionFile = new File(getFilesDir(), SINGBOX_FILE + ".version");
-        String installedVersion = "";
-        if (versionFile.isFile()) {
-            try {
-                installedVersion = new String(java.nio.file.Files.readAllBytes(versionFile.toPath()), StandardCharsets.UTF_8).trim();
-            } catch (Exception ignored) {
-                installedVersion = "";
-            }
+        // Android 10+ deliberately prevents applications targeting API 29+ from
+        // executing newly-created binaries from their writable app home. The
+        // reF1nd sing-box core is therefore packaged as a native-library payload
+        // in jniLibs and resolved from ApplicationInfo.nativeLibraryDir.
+        File target = new File(getApplicationInfo().nativeLibraryDir, SINGBOX_NATIVE_LIBRARY);
+        if (!target.isFile()) {
+            throw new IOException("未找到内置 reF1nd sing-box 核心: " + target.getAbsolutePath());
         }
-        String bundledVersion = loadAssetText(SINGBOX_VERSION_ASSET).trim();
-        if (bundledVersion.isEmpty()) bundledVersion = "latest-reF1nd";
-        if (!target.isFile() || !bundledVersion.equals(installedVersion) || target.length() < 1024) {
-            try (java.io.InputStream in = getAssets().open(SINGBOX_ASSET);
-                 java.io.FileOutputStream out = new java.io.FileOutputStream(target, false)) {
-                byte[] buffer = new byte[64 * 1024];
-                int read;
-                while ((read = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, read);
-                }
-                out.flush();
-            } catch (IOException e) {
-                throw new IOException("未找到内置 sing-box 核心资源: " + SINGBOX_ASSET, e);
-            }
-            if (!target.setExecutable(true, false) && !target.canExecute()) {
-                throw new IOException("无法设置 sing-box 核心为可执行文件");
-            }
-            try (java.io.FileOutputStream out = new java.io.FileOutputStream(versionFile, false)) {
-                out.write(bundledVersion.getBytes(StandardCharsets.UTF_8));
-            }
-        } else if (!target.canExecute()) {
-            target.setExecutable(true, false);
-        }
-        if (!target.isFile() || !target.canExecute()) {
-            throw new IOException("sing-box 核心文件不可执行");
+        if (!target.canExecute()) {
+            // Native libraries are extracted with execute permission by Android.
+            // Do not copy the file to filesDir: that location is intentionally
+            // non-executable on modern Android.
+            throw new IOException("内置 reF1nd sing-box 核心不可执行: " + target.getAbsolutePath());
         }
         return target;
     }

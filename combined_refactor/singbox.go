@@ -1857,6 +1857,11 @@ func findSingBoxBinary() (string, error) {
 		}
 		seen[value] = struct{}{}
 		if info, err := os.Stat(value); err == nil && !info.IsDir() {
+			// Do not return a readable-but-non-executable file and let execve()
+			// fail later with the much less useful "permission denied".
+			if info.Mode().Perm()&0o111 == 0 {
+				continue
+			}
 			return value, nil
 		}
 	}
