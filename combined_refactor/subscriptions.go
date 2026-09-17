@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -75,54 +74,23 @@ type subscriptionSummary struct {
 	HasContent    bool              `json:"hasContent"`
 }
 
-func subscriptionDataDirFromArgs() string {
-	args := os.Args
-	for i := 1; i < len(args); i++ {
-		arg := strings.TrimSpace(args[i])
-		if arg == "-data-dir" || arg == "--data-dir" {
-			if i+1 < len(args) {
-				return strings.TrimSpace(args[i+1])
-			}
-			continue
-		}
-		for _, prefix := range []string{"-data-dir=", "--data-dir="} {
-			if strings.HasPrefix(arg, prefix) {
-				return strings.TrimSpace(strings.TrimPrefix(arg, prefix))
-			}
-		}
-	}
-	return ""
-}
-
-func subscriptionDataDir() (string, error) {
-	// Android passes the writable app-private directory explicitly. This is the
-	// authoritative path for runtime subscription data.
-	if dir := subscriptionDataDirFromArgs(); dir != "" {
-		return dir, nil
-	}
-	if dir := strings.TrimSpace(os.Getenv("CFDATA_DATA_DIR")); dir != "" {
-		return dir, nil
+func subscriptionFilePath() string {
+	// Android stores the native backend in the APK's nativeLibraryDir, which is
+	// read-only at runtime. MainActivity supplies the app-private writable
+	// directory through CFDATA_DATA_DIR when launching the backend.
+	if dataDir := strings.TrimSpace(os.Getenv("CFDATA_DATA_DIR")); dataDir != "" {
+		return filepath.Join(dataDir, subscriptionStoreFile)
 	}
 
-	if runtime.GOOS == "android" {
-		return "", fmt.Errorf("Android 未提供可写数据目录，请使用 -data-dir <app files dir>")
-	}
-
-	// Desktop/server compatibility: use the current working directory first.
+	// The Android launcher also sets the backend working directory to
+	// Context.getFilesDir(), so use the current working directory as a safe
+	// fallback for Android and other callers that explicitly set their cwd.
 	if workingDir, err := os.Getwd(); err == nil && strings.TrimSpace(workingDir) != "" {
-		return workingDir, nil
+		return filepath.Join(workingDir, subscriptionStoreFile)
 	}
 
-	// Legacy fallback for non-Android direct launches.
-	return filepath.Dir(os.Args[0]), nil
-}
-
-func subscriptionFilePath() (string, error) {
-	dir, err := subscriptionDataDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, subscriptionStoreFile), nil
+	// Preserve the original desktop/server fallback if cwd cannot be read.
+	return filepath.Join(filepath.Dir(os.Args[0]), subscriptionStoreFile)
 }
 
 func ensureSubscriptionStoreLoaded() error {
@@ -133,11 +101,7 @@ func ensureSubscriptionStoreLoaded() error {
 		return nil
 	}
 
-	path, err := subscriptionFilePath()
-	if err != nil {
-		return err
-	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(subscriptionFilePath())
 	if os.IsNotExist(err) {
 		subscriptionStore.Items = []subscription{}
 		subscriptionStore.Loaded = true
@@ -183,11 +147,7 @@ func saveSubscriptionStoreLocked() error {
 
 	// Reuse the project's atomic file writer when available.  It writes the
 	// complete JSON to a temporary file and replaces the destination safely.
-	path, err := subscriptionFilePath()
-	if err != nil {
-		return err
-	}
-	return atomicWriteFile(path, data, 0644)
+	return atomicWriteFile(subscriptionFilePath(), data, 0644)
 }
 
 func subscriptionSummaryOf(item subscription) subscriptionSummary {
@@ -277,6 +237,18 @@ func normalizeSubscriptionHeaders(headers map[string]string) map[string]string {
 	return result
 }
 
+func subscriptionRequestHeaders(headers map[string]string) map[string]string {
+	result := map[string]string{
+		"User-Agent":      "v2rayNG/2.2.6",
+		"Connection":      "close",
+		"Accept-Encoding": "gzip",
+	}
+	for k, v := range normalizeSubscriptionHeaders(headers) {
+		result[k] = v
+	}
+	return result
+}
+
 func validateSubscriptionURL(raw string) error {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -342,7 +314,7 @@ func fetchSubscription(ctx context.Context, target subscription) (subscription, 
 		return target, err
 	}
 
-	for k, v := range normalizeSubscriptionHeaders(target.Headers) {
+	for k, v := range subscriptionRequestHeaders(target.Headers) {
 		req.Header.Set(k, v)
 	}
 
@@ -392,14 +364,37 @@ func fetchSubscription(ctx context.Context, target subscription) (subscription, 
 	return target, nil
 }
 
+func validateSubscriptionName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("订阅名称不能为空")
+	}
+	if name == "." || name == ".." || strings.ContainsAny(name, `/\\:*?"<>|`) {
+		return fmt.Errorf("订阅名称包含文件名不允许的字符")
+	}
+	return nil
+}
+
+func subscriptionNameExistsLocked(name, exceptID string) bool {
+	for _, item := range subscriptionStore.Items {
+		if item.ID == exceptID {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(item.Name), strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
+}
+
 func createOrUpdateSubscription(req subscriptionSaveRequest) (subscriptionSummary, error) {
 	if err := validateSubscriptionURL(req.URL); err != nil {
 		return subscriptionSummary{}, err
 	}
 
 	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		name = "未命名订阅"
+	if err := validateSubscriptionName(name); err != nil {
+		return subscriptionSummary{}, err
 	}
 	urlText := strings.TrimSpace(req.URL)
 	headers := normalizeSubscriptionHeaders(req.Headers)
@@ -410,6 +405,10 @@ func createOrUpdateSubscription(req subscriptionSaveRequest) (subscriptionSummar
 
 	subscriptionStore.Lock()
 	defer subscriptionStore.Unlock()
+
+	if subscriptionNameExistsLocked(name, strings.TrimSpace(req.ID)) {
+		return subscriptionSummary{}, fmt.Errorf("订阅名称已存在: %s", name)
+	}
 
 	now := time.Now().Format(time.RFC3339)
 

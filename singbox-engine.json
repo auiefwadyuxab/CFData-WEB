@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "nodes_dir": "singbox_nodes",
+  "update_interval_hours": 6,
+  "provider_update_interval": "6h",
+  "startup_sync": true,
+  "test_repeat": 3,
+  "test_timeout_seconds": 8,
+  "download_test_bytes": 10485760,
+  "download_test_url": "https://speed.cloudflare.com/__down?bytes=99999999",
+  "prefer_sing_tun": true,
+  "sing_tun_requires_root": true,
+  "mixed_fallback": true,
+  "local_proxy_host": "127.0.0.1",
+  "controller_host": "127.0.0.1",
+  "subscriptions": []
+}

@@ -190,6 +190,63 @@ jobs:
           grep -Fq 'id="btnSubscriptions"' combined_refactor/index.html
           echo "Subscription manager integration checks passed for Android build."
 
+      - name: Install latest reF1nd Android ARM64 binary from project-root ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          archives=(
+            singboxr*.zip
+            sing-boxr*.zip
+            singbox*.zip
+            sing-box*.zip
+          )
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "未找到 reF1nd sing-box Android ARM64 二进制 ZIP。请将最新 singboxr ZIP 放在项目根目录。" >&2
+            exit 1
+          fi
+
+          archive="$(printf '%s\n' "${archives[@]}" | xargs -r ls -1t | head -n 1)"
+          if [ -z "$archive" ] || [ ! -f "$archive" ]; then
+            echo "无法选择 singboxr ZIP。" >&2
+            exit 1
+          fi
+          echo "Using newest sing-box archive: ${archive}"
+          extract_dir="$RUNNER_TEMP/cfdata-singboxr"
+          rm -rf "$extract_dir"
+          mkdir -p "$extract_dir"
+          unzip -q "$archive" -d "$extract_dir"
+
+          candidate=""
+          while IFS= read -r -d '' file; do
+            if file "$file" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'; then
+              candidate="$file"
+              break
+            fi
+          done < <(find "$extract_dir" -type f -print0)
+
+          if [ -z "$candidate" ]; then
+            echo "ZIP 中没有检测到 Android ARM64 ELF 二进制。" >&2
+            find "$extract_dir" -maxdepth 4 -type f -print >&2 || true
+            exit 1
+          fi
+
+          chmod +x "$candidate"
+          echo "Selected binary: $candidate"
+          version_output="$($candidate version 2>&1 || $candidate --version 2>&1 || true)"
+          echo "$version_output"
+          if ! printf '%s\n' "$version_output" | grep -Eq 'sing-box|1\.(1[5-9]|[2-9][0-9])'; then
+            echo "无法确认 sing-box 版本，拒绝将未知文件打包进 APK。" >&2
+            exit 1
+          fi
+
+          mkdir -p app/src/main/assets
+          cp "$candidate" app/src/main/assets/sing-box-android-arm64
+          printf '%s\n' "$version_output" | head -n 1 > app/src/main/assets/sing-box-android-arm64.version
+          chmod 644 app/src/main/assets/sing-box-android-arm64 app/src/main/assets/sing-box-android-arm64.version
+          ls -lh app/src/main/assets/sing-box-android-arm64*
+
       - name: Build Android backend
         working-directory: combined_refactor
         env:

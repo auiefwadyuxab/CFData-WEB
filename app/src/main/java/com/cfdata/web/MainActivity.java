@@ -44,6 +44,10 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int PORT = 13335;
     private static final String BACKEND_LIBRARY = "libcfdata.so";
+    private static final String SINGBOX_ASSET = "sing-box-android-arm64";
+    private static final String SINGBOX_FILE = "sing-box-android-arm64";
+    private static final String SINGBOX_VERSION_ASSET = "sing-box-android-arm64.version";
+    private static final String SINGBOX_UI_ASSET = "singbox-ui.js";
     private static final int REQUEST_CREATE_DOCUMENT = 1001;
     private static final int REQUEST_FILE_CHOOSER = 1002;
 
@@ -219,17 +223,21 @@ public class MainActivity extends Activity {
             try {
                 setLoadingMessage("正在准备本地服务...");
                 File backend = prepareBackendBinary();
-                File appDataDir = getFilesDir();
+                setLoadingMessage("正在准备 sing-box 核心...");
+                File singBox = prepareSingBoxBinary();
                 ProcessBuilder builder = new ProcessBuilder(
                         backend.getAbsolutePath(),
                         "-host", "127.0.0.1",
                         "-port", String.valueOf(PORT)
                 );
+                File appDataDir = getFilesDir();
                 builder.directory(appDataDir);
-                // Pass the writable Android app-private directory as an explicit
-                // Go command-line argument. The Go backend treats -data-dir as
-                // authoritative and will never fall back to lib/arm64 on Android.
+                // os.Args[0] points at /data/app/.../lib/arm64/libcfdata.so on
+                // Android, which is read-only. Explicitly provide Go with the
+                // app-private writable directory used for subscriptions.json.
                 builder.environment().put("CFDATA_DATA_DIR", appDataDir.getAbsolutePath());
+                builder.environment().put("CFDATA_SINGBOX_PATH", singBox.getAbsolutePath());
+                builder.environment().put("CFDATA_APP_UID", String.valueOf(android.os.Process.myUid()));
                 builder.redirectErrorStream(true);
                 backendProcess = builder.start();
                 setLoadingMessage("正在连接本地服务...");
@@ -285,6 +293,52 @@ public class MainActivity extends Activity {
         throw new IOException("未找到内置后端: " + nativeBackend.getAbsolutePath());
     }
 
+    private File prepareSingBoxBinary() throws IOException {
+        File target = new File(getFilesDir(), SINGBOX_FILE);
+        File versionFile = new File(getFilesDir(), SINGBOX_FILE + ".version");
+        String installedVersion = "";
+        if (versionFile.isFile()) {
+            try {
+                installedVersion = new String(java.nio.file.Files.readAllBytes(versionFile.toPath()), StandardCharsets.UTF_8).trim();
+            } catch (Exception ignored) {
+                installedVersion = "";
+            }
+        }
+        String bundledVersion = "latest-reF1nd";
+        try {
+            bundledVersion = loadAssetText(SINGBOX_VERSION_ASSET).trim();
+            if (bundledVersion.isEmpty()) bundledVersion = "latest-reF1nd";
+        } catch (IOException ignored) {
+            // Older build artifacts may not contain a version marker. The binary
+            // itself is still copied and a generic marker is stored.
+        }
+        if (!target.isFile() || !bundledVersion.equals(installedVersion) || target.length() < 1024) {
+            try (java.io.InputStream in = getAssets().open(SINGBOX_ASSET);
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(target, false)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                out.flush();
+            } catch (IOException e) {
+                throw new IOException("未找到内置 sing-box 核心资源: " + SINGBOX_ASSET, e);
+            }
+            if (!target.setExecutable(true, false) && !target.canExecute()) {
+                throw new IOException("无法设置 sing-box 核心为可执行文件");
+            }
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(versionFile, false)) {
+                out.write(bundledVersion.getBytes(StandardCharsets.UTF_8));
+            }
+        } else if (!target.canExecute()) {
+            target.setExecutable(true, false);
+        }
+        if (!target.isFile() || !target.canExecute()) {
+            throw new IOException("sing-box 核心文件不可执行");
+        }
+        return target;
+    }
+
     private void waitForBackend() throws InterruptedException {
         long deadline = System.currentTimeMillis() + 15000;
         while (System.currentTimeMillis() < deadline) {
@@ -330,6 +384,10 @@ public class MainActivity extends Activity {
                         + "};"
                         + "})();";
                 view.evaluateJavascript(script, null);
+                String singBoxScript = loadAssetText(SINGBOX_UI_ASSET);
+                if (!singBoxScript.isEmpty()) {
+                    view.evaluateJavascript(singBoxScript, null);
+                }
                 hideLoadingView();
             }
 
@@ -347,6 +405,20 @@ public class MainActivity extends Activity {
                 return false;
             }
         }));
+    }
+
+    private String loadAssetText(String assetName) {
+        try (java.io.InputStream in = getAssets().open(assetName)) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            return out.toString(StandardCharsets.UTF_8.name());
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     public class AndroidBridge {
