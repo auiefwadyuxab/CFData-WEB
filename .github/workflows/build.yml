@@ -73,6 +73,12 @@ jobs:
             echo "AGP 9 built-in Kotlin migration incomplete: old Kotlin Android plugin/options remain" >&2
             exit 1
           fi
+          for fn in syncProviders trueLatencyTest trueSpeedTest trueTest stop; do
+            grep -Eq "^[[:space:]]*@JvmStatic$" <(awk -v name="$fn" '$0 ~ "fun " name "\\(" {print prev "\n" $0; exit} {prev=$0}' app/src/main/java/com/cfdata/web/singbox/CFDataSingBoxCore.kt) || {
+              echo "CFDataSingBoxCore.$fn must expose a JVM static entry point for MainActivity.java" >&2
+              exit 1
+            }
+          done
           python3 - <<'PY'
           import re
           from pathlib import Path
@@ -459,6 +465,13 @@ jobs:
 
       - name: Compile Android Kotlin sources
         run: ./gradlew :app:compileReleaseKotlin --no-daemon --stacktrace
+
+      - name: Preflight Kotlin / Java bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew compileReleaseKotlin compileReleaseJavaWithJavac --no-daemon --stacktrace
+          echo "Kotlin/Java bridge compilation passed."
 
       - name: Build release APK
         env:

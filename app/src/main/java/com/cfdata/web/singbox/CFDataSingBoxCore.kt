@@ -82,6 +82,7 @@ object CFDataSingBoxCore {
         }
     }
 
+    @JvmStatic
     fun syncProviders(payload: String): String = synchronized(operationLock) {
         val request = JSONObject(payload)
         val configs = request.optJSONArray("configs") ?: JSONArray()
@@ -163,6 +164,7 @@ object CFDataSingBoxCore {
     }
 
     /** Run only the true HTTP latency stage for all supplied nodes. */
+    @JvmStatic
     fun trueLatencyTest(payload: String): String = synchronized(operationLock) {
         val request = JSONObject(payload)
         val nodes = request.optJSONArray("nodes") ?: JSONArray()
@@ -195,6 +197,7 @@ object CFDataSingBoxCore {
     }
 
     /** Run only the true download stage, in the caller-provided latency order. */
+    @JvmStatic
     fun trueSpeedTest(payload: String): String = synchronized(operationLock) {
         val request = JSONObject(payload)
         val nodes = request.optJSONArray("nodes") ?: JSONArray()
@@ -225,6 +228,7 @@ object CFDataSingBoxCore {
     }
 
     /** Compatibility entry point for older WebView builds: latency, then speed. */
+    @JvmStatic
     fun trueTest(payload: String): String = synchronized(operationLock) {
         val request = JSONObject(payload)
         val nodes = request.optJSONArray("nodes") ?: JSONArray()
@@ -663,6 +667,7 @@ object CFDataSingBoxCore {
         return digest.joinToString("") { "%02x".format(it) }
     }
 
+    @JvmStatic
     fun stop() {
         synchronized(lifecycleLock) {
             if (!started && commandServer == null) return
