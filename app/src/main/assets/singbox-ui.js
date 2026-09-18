@@ -10,8 +10,8 @@
     const DEFAULT_TRACE_URL = 'https://speed.cloudflare.com/cdn-cgi/trace';
     const LATENCY_REPEAT = 3;
     const LATENCY_TIMEOUT_SECONDS = 3;
-    const LATENCY_CONCURRENCY = 16;
-    const MAX_LATENCY_CONCURRENCY = 64;
+    const DEFAULT_LATENCY_CONCURRENCY = 16;
+    const LATENCY_CONCURRENCY_OPTIONS = [8, 16, 24, 32, 48, 64];
     const SPEED_DURATION_SECONDS = 6;
     const INTER_SPEED_PAUSE_MS = 1200;
 
@@ -43,7 +43,8 @@
         subscriptions: [],
         nodes: [],
         running: false,
-        speedURL: ''
+        speedURL: '',
+        latencyConcurrency: DEFAULT_LATENCY_CONCURRENCY
     };
 
     function panelHTML() {
@@ -91,7 +92,12 @@
                     <div style="font-size:12px;color:var(--text-secondary);">延迟测试</div>
                     <div style="font-size:12px;">3 次独立真实 HTTP 请求 · 单次超时 3 秒 · 无倍率</div>
                     <div style="font-size:12px;color:var(--text-secondary);">延迟并发</div>
-                    <div style="font-size:12px;">默认 16 个节点并行；只影响延迟阶段，不会把下载测速并发化</div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;">
+                        <select id="cfSBLatencyConcurrency" style="min-width:120px;">
+                            ${LATENCY_CONCURRENCY_OPTIONS.map(value => `<option value="${value}">${value} 个节点并行</option>`).join('')}
+                        </select>
+                        <span style="color:var(--text-secondary);">只影响批量延迟阶段；每节点仍按 3 次请求计算丢包率/平均延迟，下载测速仍逐节点进行。</span>
+                    </div>
                     <div style="font-size:12px;color:var(--text-secondary);">排序</div>
                     <div style="font-size:12px;">成功优先 → 丢包率低 → 平均真延迟低 → 最大真延迟低</div>
                     <div style="font-size:12px;color:var(--text-secondary);">下载测速</div>
@@ -310,6 +316,28 @@
             if (k && v) headers[k] = v;
         });
         return headers;
+    }
+
+    function loadLatencyConcurrency() {
+        try {
+            const value = Number(localStorage.getItem('cfdata-r-latency-concurrency'));
+            return LATENCY_CONCURRENCY_OPTIONS.includes(value) ? value : DEFAULT_LATENCY_CONCURRENCY;
+        } catch (_) {
+            return DEFAULT_LATENCY_CONCURRENCY;
+        }
+    }
+
+    function saveLatencyConcurrency() {
+        try { localStorage.setItem('cfdata-r-latency-concurrency', String(state.latencyConcurrency)); } catch (_) {}
+    }
+
+    function syncLatencyConcurrencyUI() {
+        const select = document.getElementById('cfSBLatencyConcurrency');
+        if (!select) return;
+        state.latencyConcurrency = LATENCY_CONCURRENCY_OPTIONS.includes(state.latencyConcurrency)
+            ? state.latencyConcurrency
+            : DEFAULT_LATENCY_CONCURRENCY;
+        select.value = String(state.latencyConcurrency);
     }
 
     function saveSpeedURLToLocalStorage() {
@@ -717,12 +745,15 @@
         if (!nodes.length) return status('当前节点没有可用的 reF1nd outbound', true);
         state.running = true;
         try {
-            status(`第一阶段：${nodes.length} 个节点并行做 ${LATENCY_REPEAT} 次真实 HTTP 延迟测试（并发 ${LATENCY_CONCURRENCY}）……`);
+            status(`第一阶段：${nodes.length} 个节点并行做 ${LATENCY_REPEAT} 次真实 HTTP 延迟测试（并发 ${state.latencyConcurrency}）……`);
+            const concurrency = LATENCY_CONCURRENCY_OPTIONS.includes(Number(state.latencyConcurrency))
+                ? Number(state.latencyConcurrency)
+                : DEFAULT_LATENCY_CONCURRENCY;
             const latencyPayload = {
                 nodes: nodes.map(nodePayload),
                 repeat: LATENCY_REPEAT,
                 timeout: LATENCY_TIMEOUT_SECONDS,
-                concurrency: LATENCY_CONCURRENCY
+                concurrency
             };
             const latencyBatch = bridgeCall('singBoxTrueLatencyTest', latencyPayload);
             const batchResults = Array.isArray(latencyBatch?.results) ? latencyBatch.results : [];
@@ -732,7 +763,7 @@
                 if (result) node.lastTest = result;
             });
             renderNodes(latencySortEntries(state.nodes));
-            status(`真实延迟阶段完成：${batchResults.length}/${nodes.length}；并发 ${Number(latencyBatch?.concurrency || LATENCY_CONCURRENCY)}`);
+            status(`真实延迟阶段完成：${batchResults.length}/${nodes.length}；并发 ${Number(latencyBatch?.concurrency || state.latencyConcurrency)}`);
             state.nodes = latencySortEntries(state.nodes);
             renderNodes(state.nodes);
             const latencyPassed = state.nodes.filter((node) => node.lastTest?.success && node.lastTest?.testedOutboundTag);
@@ -781,6 +812,8 @@
         if (host) host.classList.toggle('hidden', !state.visible);
         installLogTools();
         if (state.visible) {
+            state.latencyConcurrency = loadLatencyConcurrency();
+            syncLatencyConcurrencyUI();
             restoreRSpeedUrlUI();
             loadSubs().catch((error) => status(`订阅读取失败：${error.message}`, true));
             refreshNodes(false);
@@ -806,6 +839,12 @@
         document.getElementById('cfSBRefresh').onclick = () => { loadSubs(); refreshNodes(false); };
         document.getElementById('cfSBModalClose').onclick = () => { document.getElementById('cfSBModal').style.display = 'none'; };
         document.getElementById('cfSBSpeedUrlPreset').onchange = syncRSpeedUrlUI;
+        document.getElementById('cfSBLatencyConcurrency').onchange = (event) => {
+            const value = Number(event.target.value);
+            state.latencyConcurrency = LATENCY_CONCURRENCY_OPTIONS.includes(value) ? value : DEFAULT_LATENCY_CONCURRENCY;
+            saveLatencyConcurrency();
+            syncLatencyConcurrencyUI();
+        };
         document.getElementById('cfSBSpeedUrl').oninput = () => {
             const select = document.getElementById('cfSBSpeedUrlPreset');
             if (select && select.value !== AUTO_SPEED_URL && select.value !== 'custom') select.value = 'custom';
