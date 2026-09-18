@@ -90,7 +90,7 @@ class CFDataPlatformInterface : PlatformInterface {
             )
             item.addresses = StringArray(
                 javaInterface.interfaceAddresses.mapNotNull { it.address?.let { address ->
-                    addressPrefix(address, it.networkPrefixLength)
+                    addressPrefix(address, it.networkPrefixLength.toInt())
                 } }.iterator(),
             )
             item.type = when {
