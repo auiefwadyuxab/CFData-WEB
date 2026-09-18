@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "subscription_root": "singbox_subscriptions",
   "config_template": "singbox-r-template.json",
   "provider_file": "Provider1.json",
@@ -11,11 +11,16 @@
   "startup_sync": false,
   "sync_timeout_seconds": 90,
   "test_repeat": 3,
+  "latency_timeout_seconds": 3,
+  "speed_duration_seconds": 6,
   "test_timeout_seconds": 8,
   "download_test_bytes": 10485760,
   "download_test_url": "https://speed.cloudflare.com/__down?bytes=99999999",
-  "core_mode": "android-libbox-in-process",
+  "core_mode": "android-sfa-style-libbox-service",
   "root_required": false,
   "provider_ingestion": "reF1nd-ProviderRemote",
-  "true_test": "CFData trace/download through direct sing-box outbound"
+  "true_latency": "3 independent real HTTP requests through the exact sing-box outbound; sort by loss then real TTFB",
+  "true_speed": "continuous download through the latency-selected outbound for a fixed 6-second window",
+  "legacy_tcping_httping_multiplier": false,
+  "legacy_latency_multiplier": false
 }

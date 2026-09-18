@@ -1,23 +1,32 @@
 package libbox
 
-// CFDataTrueTest exposes a small CFData-specific test entry point while
-// keeping the actual connection logic inside sing-box's daemon layer. The
-// caller must have an already started CommandServer instance; the method does
-// not spawn a process, require root, or use an inbound proxy.
-func (s *CommandServer) CFDataTrueTest(
+// CFDataTrueLatencyTest exposes CFData's real outbound HTTP latency test to
+// Android through gomobile. The actual transport stays inside daemon so it can
+// access the running sing-box instance and outbound manager directly.
+func (s *CommandServer) CFDataTrueLatencyTest(
 	outboundTag string,
 	testURL string,
-	downloadURL string,
 	repeat int32,
 	timeoutSeconds int32,
-	downloadBytes int64,
 ) (string, error) {
-	return s.StartedService.CFDataTrueTest(
+	return s.StartedService.CFDataTrueLatencyTest(
 		outboundTag,
 		testURL,
-		downloadURL,
 		repeat,
 		timeoutSeconds,
-		downloadBytes,
+	)
+}
+
+// CFDataTrueSpeedTest exposes CFData's fixed-window real download test to
+// Android through gomobile.
+func (s *CommandServer) CFDataTrueSpeedTest(
+	outboundTag string,
+	downloadURL string,
+	durationSeconds int32,
+) (string, error) {
+	return s.StartedService.CFDataTrueSpeedTest(
+		outboundTag,
+		downloadURL,
+		durationSeconds,
 	)
 }

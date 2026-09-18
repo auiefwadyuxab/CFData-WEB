@@ -10,12 +10,14 @@ import (
 	"net/http/httptrace"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/dialer"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/ntp"
 )
 
 type cfDataTraceAttempt struct {
@@ -24,62 +26,81 @@ type cfDataTraceAttempt struct {
 	LatencyMs      int64  `json:"latencyMs"`
 	StatusCode     int    `json:"statusCode,omitempty"`
 	OutboundIP     string `json:"outboundIP,omitempty"`
+	Colo           string `json:"colo,omitempty"`
 	Error          string `json:"error,omitempty"`
-	TCPConnectMs   int64  `json:"tcpConnectMs,omitempty"`
+	OutboundDialMs int64  `json:"outboundDialMs,omitempty"`
 	TLSHandshakeMs int64  `json:"tlsHandshakeMs,omitempty"`
 	TTFBMs         int64  `json:"ttfbMs,omitempty"`
 }
 
-type cfDataTrueTestResult struct {
+type cfDataTrueLatencyResult struct {
 	Success       bool                 `json:"success"`
 	SuccessCount  int                  `json:"successCount"`
 	TotalAttempts int                  `json:"totalAttempts"`
 	LossRate      float64              `json:"lossRate"`
-	AvgLatencyMs  float64              `json:"avgLatencyMs,omitempty"`
+	AvgLatencyMs  float64              `json:"avgLatencyMs"`
 	MinLatencyMs  int64                `json:"minLatencyMs,omitempty"`
 	MaxLatencyMs  int64                `json:"maxLatencyMs,omitempty"`
 	OutboundIP    string               `json:"outboundIP,omitempty"`
-	Speed         string               `json:"speed,omitempty"`
-	Results       []cfDataTraceAttempt `json:"results"`
+	Colo          string               `json:"colo,omitempty"`
 	Error         string               `json:"error,omitempty"`
+	Results       []cfDataTraceAttempt `json:"results"`
 	Mode          string               `json:"mode"`
 }
 
-// CFDataTrueTest runs the CFData trace/download checks through one already
-// running sing-box outbound. It intentionally bypasses mixed/HTTP proxy
-// inbounds: the HTTP transport's DialContext is wired directly to the
-// outbound's ResolveDialer, matching SFA's outbound test model.
-func (s *StartedService) CFDataTrueTest(
+type cfDataTrueSpeedResult struct {
+	Success    bool    `json:"success"`
+	Speed      string  `json:"speed,omitempty"`
+	SpeedMBps  float64 `json:"speedMBps,omitempty"`
+	DurationMs int64   `json:"speedDurationMs,omitempty"`
+	Bytes      int64   `json:"speedBytes,omitempty"`
+	StatusCode int     `json:"statusCode,omitempty"`
+	OutboundIP string  `json:"outboundIP,omitempty"`
+	Error      string  `json:"error,omitempty"`
+	Mode       string  `json:"mode"`
+}
+
+const (
+	cfDataDefaultLatencyRepeat  = 3
+	cfDataDefaultLatencyTimeout = 3 * time.Second
+	cfDataDefaultSpeedDuration  = 6 * time.Second
+	cfDataMaxLatencyRepeat      = 10
+	cfDataMaxLatencyTimeout     = 60 * time.Second
+	cfDataMaxSpeedDuration      = 120 * time.Second
+	cfDataDefaultTraceURL       = "https://speed.cloudflare.com/cdn-cgi/trace"
+)
+
+// CFDataTrueLatencyTest performs real HTTP probes through the exact sing-box
+// outbound selected by the caller. This deliberately does not use TCPing,
+// HTTPing multipliers, a local mixed inbound, or a standalone sing-box process.
+func (s *StartedService) CFDataTrueLatencyTest(
 	outboundTag string,
 	testURL string,
-	downloadURL string,
 	repeat int32,
 	timeoutSeconds int32,
-	downloadBytes int64,
 ) (string, error) {
+	outboundTag = strings.TrimSpace(outboundTag)
 	if outboundTag == "" {
 		return "", E.New("outbound tag is empty")
 	}
+	testURL = strings.TrimSpace(testURL)
 	if testURL == "" {
-		return "", E.New("test URL is empty")
+		testURL = cfDataDefaultTraceURL
 	}
 	if repeat <= 0 {
-		repeat = 1
+		repeat = cfDataDefaultLatencyRepeat
 	}
-	if repeat > 10 {
-		repeat = 10
+	if repeat > cfDataMaxLatencyRepeat {
+		repeat = cfDataMaxLatencyRepeat
 	}
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = 8
+		timeoutSeconds = int32(cfDataDefaultLatencyTimeout / time.Second)
 	}
-	if timeoutSeconds > 60 {
-		timeoutSeconds = 60
-	}
-	if downloadBytes < 0 {
-		downloadBytes = 0
+	if time.Duration(timeoutSeconds)*time.Second > cfDataMaxLatencyTimeout {
+		timeoutSeconds = int32(cfDataMaxLatencyTimeout / time.Second)
 	}
 
-	ctx, cancel := context.WithCancel(s.ctx)
+	ctx, cancel := context.WithTimeout(s.ctx, time.Duration(repeat)*time.Duration(timeoutSeconds)*time.Second+10*time.Second)
 	defer cancel()
 	if err := s.waitForStarted(ctx); err != nil {
 		return "", E.Cause(err, "wait for sing-box started")
@@ -105,70 +126,157 @@ func (s *StartedService) CFDataTrueTest(
 		adapter.DNSQueryOptions{},
 		0,
 	)
+	transport := newCFDataOutboundTransport(resolvedDialer, instance.ctx, time.Duration(timeoutSeconds)*time.Second)
+	client := &http.Client{Transport: transport}
+	defer transport.CloseIdleConnections()
 
-	transport := &http.Transport{
-		Proxy:               nil,
-		ForceAttemptHTTP2:   true,
-		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: time.Duration(timeoutSeconds) * time.Second,
+	result := cfDataTrueLatencyResult{
+		TotalAttempts: int(repeat),
+		Results:       make([]cfDataTraceAttempt, 0, repeat),
+		Mode:          "android-sfa-style-libbox-true-http",
+	}
+	var totalLatency int64
+	for attempt := 1; attempt <= int(repeat); attempt++ {
+		probe := runCFDataTraceAttempt(ctx, client, testURL, time.Duration(timeoutSeconds)*time.Second, attempt)
+		result.Results = append(result.Results, probe)
+		if !probe.Success {
+			continue
+		}
+		result.SuccessCount++
+		totalLatency += probe.LatencyMs
+		if result.MinLatencyMs == 0 || probe.LatencyMs < result.MinLatencyMs {
+			result.MinLatencyMs = probe.LatencyMs
+		}
+		if probe.LatencyMs > result.MaxLatencyMs {
+			result.MaxLatencyMs = probe.LatencyMs
+		}
+		if result.OutboundIP == "" {
+			result.OutboundIP = probe.OutboundIP
+		}
+		if result.Colo == "" {
+			result.Colo = probe.Colo
+		}
+	}
+	result.LossRate = float64(int(repeat)-result.SuccessCount) * 100 / float64(repeat)
+	result.Success = result.SuccessCount > 0
+	if result.SuccessCount > 0 {
+		result.AvgLatencyMs = float64(totalLatency) / float64(result.SuccessCount)
+	}
+	if !result.Success {
+		result.Error = firstCFDataError(result.Results)
+		if result.Error == "" {
+			result.Error = "all true HTTP attempts failed"
+		}
+	}
+
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return "", E.Cause(err, "marshal CFData true latency result")
+	}
+	return string(raw), nil
+}
+
+// CFDataTrueSpeedTest measures continuous download throughput for a fixed
+// window, matching CFData's original 6-second windowed speed methodology while
+// routing every request through the selected sing-box outbound.
+func (s *StartedService) CFDataTrueSpeedTest(
+	outboundTag string,
+	downloadURL string,
+	durationSeconds int32,
+) (string, error) {
+	outboundTag = strings.TrimSpace(outboundTag)
+	if outboundTag == "" {
+		return "", E.New("outbound tag is empty")
+	}
+	downloadURL = strings.TrimSpace(downloadURL)
+	if downloadURL == "" {
+		return "", E.New("download URL is empty")
+	}
+	if durationSeconds <= 0 {
+		durationSeconds = int32(cfDataDefaultSpeedDuration / time.Second)
+	}
+	if time.Duration(durationSeconds)*time.Second > cfDataMaxSpeedDuration {
+		durationSeconds = int32(cfDataMaxSpeedDuration / time.Second)
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, time.Duration(durationSeconds)*time.Second+20*time.Second)
+	defer cancel()
+	if err := s.waitForStarted(ctx); err != nil {
+		return "", E.Cause(err, "wait for sing-box started")
+	}
+
+	s.serviceAccess.RLock()
+	instance := s.instance
+	s.serviceAccess.RUnlock()
+	if instance == nil {
+		return "", E.New("sing-box instance is not running")
+	}
+
+	outbound, err := resolveOutbound(instance, outboundTag)
+	if err != nil {
+		return "", err
+	}
+	resolvedDialer := dialer.NewResolveDialer(
+		instance.ctx,
+		outbound,
+		true,
+		"",
+		adapter.DNSQueryOptions{},
+		0,
+	)
+	transport := newCFDataOutboundTransport(resolvedDialer, instance.ctx, time.Duration(durationSeconds)*time.Second)
+	client := &http.Client{Transport: transport}
+	defer transport.CloseIdleConnections()
+
+	result := cfDataTrueSpeedResult{Mode: "android-sfa-style-libbox-true-download"}
+	requestCtx, requestCancel := context.WithTimeout(ctx, time.Duration(durationSeconds)*time.Second+10*time.Second)
+	defer requestCancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		result.Error = err.Error()
+		return marshalCFDataSpeedResult(result)
+	}
+	req.Close = true
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Connection", "close")
+
+	startRequest := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Error = err.Error()
+		result.DurationMs = time.Since(startRequest).Milliseconds()
+		return marshalCFDataSpeedResult(result)
+	}
+	if resp.Body == nil {
+		result.Error = "empty HTTP response body"
+		return marshalCFDataSpeedResult(result)
+	}
+	defer resp.Body.Close()
+	result.StatusCode = resp.StatusCode
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		result.Error = "unexpected HTTP status: " + resp.Status
+		return marshalCFDataSpeedResult(result)
+	}
+
+	return marshalCFDataSpeedResult(runCFDataWindowedDownload(requestCtx, result, resp, durationSeconds))
+}
+
+func newCFDataOutboundTransport(resolvedDialer dialer.ResolveDialer, boxCtx context.Context, timeout time.Duration) *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		ForceAttemptHTTP2:     true,
+		DisableKeepAlives:     true,
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		TLSClientConfig: &tls.Config{
+			Time:       ntp.TimeFuncFromContext(boxCtx),
+			RootCAs:    adapter.RootPoolFromContext(boxCtx),
+			MinVersion: tls.VersionTLS12,
+		},
 		DialContext: func(ctx context.Context, networkName, address string) (net.Conn, error) {
 			return resolvedDialer.DialContext(ctx, networkName, metadata.ParseSocksaddr(address))
 		},
 	}
-	client := &http.Client{Transport: transport}
-	defer transport.CloseIdleConnections()
-
-	result := cfDataTrueTestResult{
-		TotalAttempts: int(repeat),
-		Results:       make([]cfDataTraceAttempt, 0, repeat),
-		Mode:          "libbox-in-process-direct-outbound",
-	}
-
-	var latencyTotal int64
-	for attempt := 1; attempt <= int(repeat); attempt++ {
-		probe := runCFDataTraceAttempt(ctx, client, testURL, time.Duration(timeoutSeconds)*time.Second, attempt)
-		result.Results = append(result.Results, probe)
-		if probe.Success {
-			result.SuccessCount++
-			latencyTotal += probe.LatencyMs
-			if result.MinLatencyMs == 0 || probe.LatencyMs < result.MinLatencyMs {
-				result.MinLatencyMs = probe.LatencyMs
-			}
-			if probe.LatencyMs > result.MaxLatencyMs {
-				result.MaxLatencyMs = probe.LatencyMs
-			}
-			if result.OutboundIP == "" {
-				result.OutboundIP = probe.OutboundIP
-			}
-		}
-	}
-
-	result.LossRate = float64(int(repeat)-result.SuccessCount) * 100 / float64(repeat)
-	result.Success = result.SuccessCount > 0
-	if result.SuccessCount > 0 {
-		result.AvgLatencyMs = float64(latencyTotal) / float64(result.SuccessCount)
-	}
-	if !result.Success {
-		for _, probe := range result.Results {
-			if probe.Error != "" {
-				result.Error = probe.Error
-				break
-			}
-		}
-		if result.Error == "" {
-			result.Error = "all trace attempts failed"
-		}
-	}
-
-	if result.Success && downloadBytes > 0 && downloadURL != "" {
-		result.Speed = runCFDataDownload(client, downloadURL, downloadBytes, time.Duration(timeoutSeconds)*time.Second)
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return "", E.Cause(err, "marshal CFData test result")
-	}
-	return string(data), nil
 }
 
 func runCFDataTraceAttempt(
@@ -229,12 +337,11 @@ func runCFDataTraceAttempt(
 		return result
 	}
 	defer resp.Body.Close()
-
 	result.StatusCode = resp.StatusCode
-	body, err := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	end := time.Now()
-	if err != nil {
-		result.Error = err.Error()
+	if readErr != nil {
+		result.Error = readErr.Error()
 		result.LatencyMs = end.Sub(started).Milliseconds()
 		return result
 	}
@@ -249,85 +356,132 @@ func runCFDataTraceAttempt(
 		result.LatencyMs = result.TTFBMs
 	} else {
 		result.LatencyMs = end.Sub(started).Milliseconds()
+		result.TTFBMs = result.LatencyMs
 	}
 	if !connectStart.IsZero() && !connectDone.IsZero() && connectDone.After(connectStart) {
-		result.TCPConnectMs = connectDone.Sub(connectStart).Milliseconds()
+		result.OutboundDialMs = connectDone.Sub(connectStart).Milliseconds()
 	}
 	if !tlsStart.IsZero() && !tlsDone.IsZero() && tlsDone.After(tlsStart) {
 		result.TLSHandshakeMs = tlsDone.Sub(tlsStart).Milliseconds()
 	}
-	result.OutboundIP = parseCFDataTraceIP(string(body))
+	traceValues := parseCFDataTrace(string(body))
+	result.OutboundIP = traceValues["ip"]
+	result.Colo = traceValues["colo"]
 	result.Success = true
 	return result
 }
 
-func runCFDataDownload(
-	client *http.Client,
-	rawURL string,
-	bytesWanted int64,
-	timeout time.Duration,
-) string {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return ""
-	}
-	req.Close = true
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Connection", "close")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ""
-	}
-
-	start := time.Now()
-	var total int64
-	buffer := make([]byte, 128*1024)
-	for total < bytesWanted {
-		wanted := int64(len(buffer))
-		if remain := bytesWanted - total; remain < wanted {
-			wanted = remain
-		}
-		n, readErr := resp.Body.Read(buffer[:wanted])
-		if n > 0 {
-			total += int64(n)
-		}
-		if readErr != nil {
-			if readErr == io.EOF {
-				break
-			}
-			return ""
-		}
-	}
-	elapsed := time.Since(start).Seconds()
-	if total <= 0 || elapsed <= 0 {
-		return ""
-	}
-	mibPerSecond := float64(total) / (1024 * 1024) / elapsed
-	return formatSpeed(mibPerSecond)
+type cfDataReaderChunk struct {
+	n   int
+	err error
 }
 
-func parseCFDataTraceIP(text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) > 3 && trimmed[:3] == "ip=" {
-			return strings.TrimSpace(trimmed[3:])
+func runCFDataWindowedDownload(parent context.Context, result cfDataTrueSpeedResult, resp *http.Response, durationSeconds int32) cfDataTrueSpeedResult {
+	duration := time.Duration(durationSeconds) * time.Second
+	measureCtx, cancelMeasure := context.WithCancel(parent)
+	defer cancelMeasure()
+
+	chunks := make(chan cfDataReaderChunk, 16)
+	readerDone := make(chan struct{})
+	buffer := make([]byte, 128*1024)
+	var once sync.Once
+
+	go func() {
+		defer close(readerDone)
+		for {
+			n, err := resp.Body.Read(buffer)
+			select {
+			case chunks <- cfDataReaderChunk{n: n, err: err}:
+			case <-measureCtx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	var total int64
+	started := time.Now()
+	deadline := time.NewTimer(duration)
+	defer deadline.Stop()
+	stopReader := func() {
+		once.Do(func() {
+			cancelMeasure()
+			_ = resp.Body.Close()
+		})
+	}
+
+	done := false
+	for !done {
+		select {
+		case <-parent.Done():
+			done = true
+		case <-deadline.C:
+			done = true
+		case chunk := <-chunks:
+			if chunk.n > 0 {
+				total += int64(chunk.n)
+			}
+			if chunk.err != nil {
+				done = true
+			}
+		}
+	}
+	elapsed := time.Since(started)
+	stopReader()
+	<-readerDone
+
+	result.Bytes = total
+	result.DurationMs = elapsed.Milliseconds()
+	if total <= 0 {
+		result.Error = "0 bytes received during speed window"
+		return result
+	}
+	if elapsed <= 0 {
+		result.Error = "speed measurement duration is zero"
+		return result
+	}
+	result.SpeedMBps = float64(total) / elapsed.Seconds() / 1024 / 1024
+	result.Speed = formatSpeed(result.SpeedMBps)
+	result.Success = true
+	return result
+}
+
+func firstCFDataError(results []cfDataTraceAttempt) string {
+	for _, result := range results {
+		if strings.TrimSpace(result.Error) != "" {
+			return result.Error
 		}
 	}
 	return ""
 }
 
-func formatSpeed(mibPerSecond float64) string {
-	return formatFloatTwo(mibPerSecond) + " MB/s"
+func parseCFDataTrace(text string) map[string]string {
+	values := make(map[string]string)
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		if key != "" && value != "" {
+			values[key] = value
+		}
+	}
+	return values
 }
 
-func formatFloatTwo(value float64) string {
-	return strconv.FormatFloat(value, 'f', 2, 64)
+func formatSpeed(mibPerSecond float64) string {
+	return strconv.FormatFloat(mibPerSecond, 'f', 2, 64) + " MB/s"
+}
+
+func marshalCFDataSpeedResult(result cfDataTrueSpeedResult) (string, error) {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return "", E.Cause(err, "marshal CFData true speed result")
+	}
+	return string(raw), nil
 }

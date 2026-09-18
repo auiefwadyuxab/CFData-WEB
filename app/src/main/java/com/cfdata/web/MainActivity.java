@@ -302,7 +302,7 @@ public class MainActivity extends Activity {
                 byte[] buffer = new byte[(int) Math.min(target.length(), 128 * 1024L)];
                 int read = in.read(buffer);
                 String text = read > 0 ? new String(buffer, 0, read, StandardCharsets.UTF_8) : "";
-                current = text.contains("\"version\": 8");
+                current = text.contains("\"version\": 9");
             }
         }
         if (current) return;
@@ -461,19 +461,41 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String singBoxTrueLatencyTest(String payload) {
+            try {
+                return CFDataSingBoxCore.trueLatencyTest(payload == null ? "{}" : payload);
+            } catch (Exception e) {
+                return singBoxBridgeError(e);
+            }
+        }
+
+        @JavascriptInterface
+        public String singBoxTrueSpeedTest(String payload) {
+            try {
+                return CFDataSingBoxCore.trueSpeedTest(payload == null ? "{}" : payload);
+            } catch (Exception e) {
+                return singBoxBridgeError(e);
+            }
+        }
+
+        @JavascriptInterface
         public String singBoxTrueTest(String payload) {
             try {
                 return CFDataSingBoxCore.trueTest(payload == null ? "{}" : payload);
             } catch (Exception e) {
-                org.json.JSONObject result = new org.json.JSONObject();
-                try {
-                    result.put("success", false);
-                    result.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
-                    result.put("mode", "libbox-in-process-direct-outbound");
-                } catch (Exception ignored) {
-                }
-                return result.toString();
+                return singBoxBridgeError(e);
             }
+        }
+
+        private String singBoxBridgeError(Exception e) {
+            org.json.JSONObject result = new org.json.JSONObject();
+            try {
+                result.put("success", false);
+                result.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
+                result.put("mode", "android-sfa-style-libbox-service");
+            } catch (Exception ignored) {
+            }
+            return result.toString();
         }
     }
 

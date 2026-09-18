@@ -37,6 +37,8 @@ type singBoxConfiguredSubscription struct {
 
 type singBoxEngineConfig struct {
 	Version                int                    `json:"version"`
+	LatencyTimeoutSeconds  int                    `json:"latency_timeout_seconds"`
+	SpeedDurationSeconds   int                    `json:"speed_duration_seconds"`
 	SubscriptionRoot       string                 `json:"subscription_root"`
 	ConfigTemplate         string                 `json:"config_template"`
 	ProviderFile           string                 `json:"provider_file"`
@@ -338,16 +340,18 @@ func handleSingBoxSaveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg, err := loadSingBoxEngineConfig()
-	if err == nil {
-		item, err = prepareSingBoxSubscriptionConfig(item, cfg)
+	if err != nil {
+		writeSingBoxJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
+	summary, err := prepareSingBoxSubscriptionConfigByID(item.ID, cfg)
 	if err != nil {
 		writeSingBoxJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	writeSingBoxJSON(w, http.StatusOK, map[string]interface{}{
 		"success":          true,
-		"subscription":     item,
+		"subscription":     summary,
 		"requiresCoreSync": true,
 		"requestedSync":    body.Sync,
 	})
@@ -373,14 +377,14 @@ func handleSingBoxUpdateAPI(w http.ResponseWriter, r *http.Request) {
 		writeSingBoxJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	item, err = prepareSingBoxSubscriptionConfig(item, cfg)
+	summary, err := prepareSingBoxSubscriptionConfigByID(item.ID, cfg)
 	if err != nil {
 		writeSingBoxJSON(w, http.StatusInternalServerError, map[string]interface{}{"success": false, "syncError": err.Error(), "subscription": item})
 		return
 	}
 	writeSingBoxJSON(w, http.StatusOK, map[string]interface{}{
 		"success":          true,
-		"subscription":     item,
+		"subscription":     summary,
 		"requiresCoreSync": true,
 	})
 }
@@ -432,7 +436,9 @@ func singBoxEngineConfigPath() string {
 
 func defaultSingBoxEngineConfig() singBoxEngineConfig {
 	return singBoxEngineConfig{
-		Version:                8,
+		Version:                9,
+		LatencyTimeoutSeconds:  3,
+		SpeedDurationSeconds:   6,
 		SubscriptionRoot:       singBoxSubscriptionRootDefault,
 		ConfigTemplate:         singBoxConfigTemplateDefault,
 		ProviderFile:           singBoxProviderFileDefault,
@@ -485,6 +491,12 @@ func loadSingBoxEngineConfig() (singBoxEngineConfig, error) {
 	}
 	if cfg.TestRepeat <= 0 || cfg.TestRepeat > singBoxMaxRepeat {
 		cfg.TestRepeat = singBoxDefaultRepeat
+	}
+	if cfg.LatencyTimeoutSeconds <= 0 || cfg.LatencyTimeoutSeconds > 60 {
+		cfg.LatencyTimeoutSeconds = 3
+	}
+	if cfg.SpeedDurationSeconds <= 0 || cfg.SpeedDurationSeconds > 120 {
+		cfg.SpeedDurationSeconds = 6
 	}
 	if cfg.TestTimeoutSeconds <= 0 || cfg.TestTimeoutSeconds > 60 {
 		cfg.TestTimeoutSeconds = int(singBoxDefaultTimeout / time.Second)
@@ -588,11 +600,10 @@ func prepareSingBoxSubscriptionConfig(item subscription, cfg singBoxEngineConfig
 			"timestamp": true,
 		},
 		"providers": []interface{}{map[string]interface{}{
-			"tag":             "Provider1",
+			"tag":             singBoxProviderTag(item.ID),
 			"type":            "remote",
 			"url":             strings.TrimSpace(item.URL),
 			"exclude":         cfg.ProviderExclude,
-			"download_detour": "direct",
 			"path":            relProviderPath,
 			"update_interval": cfg.ProviderUpdateInterval,
 			"health_check":    map[string]interface{}{"enabled": false},
@@ -602,6 +613,16 @@ func prepareSingBoxSubscriptionConfig(item subscription, cfg singBoxEngineConfig
 		},
 		"route": map[string]interface{}{"final": "direct"},
 	}
+	if len(item.Headers) > 0 {
+		bootstrap["http_clients"] = []interface{}{map[string]interface{}{
+			"tag":     "ProviderHTTPClient",
+			"engine":  "go",
+			"headers": cloneSubscriptionHeaders(item.Headers),
+		}}
+		providers := bootstrap["providers"].([]interface{})
+		providers[0].(map[string]interface{})["http_client"] = "ProviderHTTPClient"
+	}
+
 	data, err := json.MarshalIndent(bootstrap, "", "  ")
 	if err != nil {
 		return subscriptionSummary{}, err
@@ -610,6 +631,14 @@ func prepareSingBoxSubscriptionConfig(item subscription, cfg singBoxEngineConfig
 		return subscriptionSummary{}, fmt.Errorf("保存 Provider Core 配置失败: %w", err)
 	}
 	return updateSubscriptionState(item, "pending", "等待 Android Libbox Core 同步", configPath, providerPath)
+}
+
+func prepareSingBoxSubscriptionConfigByID(id string, cfg singBoxEngineConfig) (subscriptionSummary, error) {
+	item, err := getSubscription(id)
+	if err != nil {
+		return subscriptionSummary{}, err
+	}
+	return prepareSingBoxSubscriptionConfig(item, cfg)
 }
 
 func handleSingBoxNodes(w http.ResponseWriter, r *http.Request) {
@@ -647,7 +676,7 @@ func handleSingBoxSyncAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	force := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("force")), "1") || strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("force")), "true")
-	ctx, cancel := contextWithFiveMinutes(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	result, err := syncAllSingBoxSubscriptions(ctx, force)
 	if err != nil {

@@ -5978,6 +5978,7 @@
             switch (msg.type) {
                 case 'init_config':
                     defaultSpeedTestUrl = msg.data.speedTestURL || defaultSpeedTestUrl;
+                    window.__CFDataDefaultSpeedTestURL = msg.data.speedTestDefault || msg.data.speedTestURL || defaultSpeedTestUrl;
                     webDebugMode = !!msg.data.debug;
                     cfCountry = normalizeProxyCountry(msg.data || {});
                     proxyWarningRequired = !!msg.data.proxyWarning;
@@ -5987,6 +5988,7 @@
                     if (proxyWarningRequired) log(`代理检测警告：当前网络标签 ${cfCountry}`);
                     const speedDefault = msg.data.speedTestDefault || msg.data.speedTestURL || AUTO_SPEED_URL_VALUE;
                     defaultSpeedTestUrl = speedDefault || defaultSpeedTestUrl;
+                    window.__CFDataDefaultSpeedTestURL = speedDefault || defaultSpeedTestUrl;
                     applySpeedUrlConfig('officialSpeedUrl', 'officialSpeedUrlPreset', speedDefault);
                     applySpeedUrlConfig('nsbSpeedUrl', 'nsbSpeedUrlPreset', speedDefault);
                     renderVersionInfo(msg.data || {});

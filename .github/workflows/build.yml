@@ -66,6 +66,10 @@ jobs:
           grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
           grep -Fq 'id="singboxRControls"' combined_refactor/index.html
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
+          grep -Fq 'singBoxTrueLatencyTest' app/src/main/assets/singbox-ui.js
+          grep -Fq 'singBoxTrueSpeedTest' app/src/main/assets/singbox-ui.js
+          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
           grep -Fq 'handleSingBoxDiagnosticsAPI' combined_refactor/singbox.go
           grep -Fq 'Provider1.update.log' combined_refactor/singbox.go
           if grep -Eq 'id="btnSubscriptions"|subscriptionControls|subscriptionUserAgent' combined_refactor/index.html; then
@@ -196,6 +200,10 @@ jobs:
           grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
           grep -Fq 'id="singboxRControls"' combined_refactor/index.html
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
+          grep -Fq 'singBoxTrueLatencyTest' app/src/main/assets/singbox-ui.js
+          grep -Fq 'singBoxTrueSpeedTest' app/src/main/assets/singbox-ui.js
+          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
           grep -Fq 'handleSingBoxDiagnosticsAPI' combined_refactor/singbox.go
           grep -Fq 'Provider1.update.log' combined_refactor/singbox.go
           if grep -Eq 'id="btnSubscriptions"|subscriptionControls|subscriptionUserAgent' combined_refactor/index.html; then
@@ -208,20 +216,30 @@ jobs:
           fi
           test -s third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
           test -s third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
+          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
+          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
+          if grep -RInE 'CFDataTrueTest' third_party/ref1nd-libbox-overrides; then
+            echo "旧的合并式 CFDataTrueTest override 仍存在" >&2
+            exit 1
+          fi
           if grep -RInE 'su -c|findSuBinary|libsingbox|CFDATA_SINGBOX_PATH' app/src/main/java/com/cfdata/web/singbox app/src/main/java/com/cfdata/web/MainActivity.java; then
             echo "Android Libbox 真连接路径仍包含旧 standalone/root 启动逻辑" >&2
             exit 1
           fi
           echo "sing-box R subscription integration checks passed for Android build."
 
-      - name: Install Android SDK and NDK for reF1nd Libbox build
+      - name: Install Android 17 Preview SDK and NDK for reF1nd Libbox build
         shell: bash
         run: |
           set -euo pipefail
+          # Android 17 / API 37 is currently distributed as minor-versioned SDK
+          # platforms. The published platform package is android-37.0 rather than
+          # the nonexistent plain android-37 coordinate.
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager --install \
             "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;35.0.0" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0" \
             "ndk;28.0.13004108"
 
       - name: Build reF1nd Libbox Android AAR
