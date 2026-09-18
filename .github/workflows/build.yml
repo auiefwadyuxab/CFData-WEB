@@ -447,7 +447,7 @@ jobs:
           set -euo pipefail
           ./gradlew --version
           test -f gradle/wrapper/gradle-wrapper.properties
-          grep -Fq 'gradle-9.7.0-bin.zip' gradle/wrapper/gradle-wrapper.properties
+          grep -Fq 'gradle-9.6.1-bin.zip' gradle/wrapper/gradle-wrapper.properties
           python3 - <<'PY'
           import re
           from pathlib import Path

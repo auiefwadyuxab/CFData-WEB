@@ -461,6 +461,15 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String singBoxStatus(String payload) {
+            try {
+                return CFDataSingBoxCore.status();
+            } catch (Exception e) {
+                return singBoxBridgeError(e);
+            }
+        }
+
+        @JavascriptInterface
         public String singBoxTrueLatencyTest(String payload) {
             try {
                 return CFDataSingBoxCore.trueLatencyTest(payload == null ? "{}" : payload);

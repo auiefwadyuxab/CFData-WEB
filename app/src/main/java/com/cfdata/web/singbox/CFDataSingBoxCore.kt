@@ -668,6 +668,17 @@ object CFDataSingBoxCore {
     }
 
     @JvmStatic
+    fun status(): String = synchronized(lifecycleLock) {
+        JSONObject().apply {
+            put("success", true)
+            put("serverCreated", commandServer != null)
+            put("serviceStarted", started)
+            put("testConfigReady", testConfigDigest != null)
+            put("mode", CORE_MODE)
+        }.toString()
+    }
+
+    @JvmStatic
     fun stop() {
         synchronized(lifecycleLock) {
             if (!started && commandServer == null) return

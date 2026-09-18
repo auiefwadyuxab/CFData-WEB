@@ -62,7 +62,7 @@
                 box-shadow:0 8px 28px rgba(0,0,0,.06);
             }
             #cfdataSingBoxPanel .cf-sb-hero {
-                padding:18px 18px 16px;
+                padding:14px 15px 12px;
                 background:linear-gradient(135deg, rgba(59,130,246,.10), rgba(16,185,129,.06));
                 border-bottom:1px solid var(--border-color);
             }
@@ -73,10 +73,10 @@
                 margin-top:14px;
             }
             #cfdataSingBoxPanel .cf-sb-card {
-                min-height:74px;
-                padding:12px 14px;
+                min-height:62px;
+                padding:9px 11px;
                 border:1px solid var(--border-color);
-                border-radius:14px;
+                border-radius:12px;
                 background:var(--bg-color);
             }
             #cfdataSingBoxPanel .cf-sb-label {
@@ -91,16 +91,47 @@
                 letter-spacing:-.02em;
             }
             #cfdataSingBoxPanel .cf-sb-section {
-                margin-top:12px;
-                padding:14px;
+                margin-top:9px;
+                padding:10px 11px;
                 border:1px solid var(--border-color);
-                border-radius:14px;
+                border-radius:12px;
                 background:var(--card-bg);
             }
             #cfdataSingBoxPanel .cf-sb-actions {
                 display:flex;
-                gap:8px;
+                gap:6px;
                 flex-wrap:wrap;
+                align-items:center;
+            }
+            #cfdataSingBoxPanel .cf-sb-top {
+                display:grid;
+                grid-template-columns:minmax(0,1fr) auto;
+                gap:10px;
+                align-items:start;
+            }
+            #cfdataSingBoxPanel .cf-sb-form-grid {
+                display:grid;
+                grid-template-columns:120px minmax(0,1fr);
+                gap:8px 10px;
+                align-items:center;
+            }
+            #cfdataSingBoxPanel .cf-sb-form-grid .cf-sb-full { grid-column:1 / -1; }
+            #cfdataSingBoxPanel .cf-sb-form-label {
+                color:var(--text-secondary);
+                font-size:12px;
+                white-space:nowrap;
+            }
+            #cfdataSingBoxPanel .cf-sb-form-input { min-width:0;width:100%;box-sizing:border-box; }
+            #cfdataSingBoxPanel .cf-sb-test-grid {
+                display:grid;
+                grid-template-columns:105px minmax(0,1fr);
+                gap:8px;
+                align-items:center;
+            }
+            #cfdataSingBoxPanel .cf-sb-speed-row {
+                display:grid;
+                grid-template-columns:minmax(125px,auto) minmax(0,1fr) 38px;
+                gap:7px;
                 align-items:center;
             }
             #cfdataSingBoxPanel .cf-sb-muted { color:var(--text-secondary);font-size:12px;line-height:1.7; }
@@ -122,7 +153,7 @@
             }
             #cfdataSingBoxPanel table thead th {
                 position:sticky;top:0;z-index:2;
-                padding:10px;
+                padding:8px 9px;
                 text-align:left;
                 background:var(--bg-color);
                 border-bottom:1px solid var(--border-color);
@@ -148,11 +179,18 @@
             #cfdataSingBoxPanel .cf-sb-count-note { color:var(--text-secondary);font-size:11px; }
             @media (max-width: 900px) {
                 #cfdataSingBoxPanel .cf-sb-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+                #cfdataSingBoxPanel .cf-sb-top { grid-template-columns:1fr; }
+                #cfdataSingBoxPanel .cf-sb-actions { justify-content:flex-start; }
             }
             @media (max-width: 560px) {
-                #cfdataSingBoxPanel .cf-sb-grid { grid-template-columns:1fr 1fr;gap:8px; }
-                #cfdataSingBoxPanel .cf-sb-card { min-height:68px;padding:10px; }
+                #cfdataSingBoxPanel .cf-sb-grid { grid-template-columns:1fr 1fr;gap:7px; }
+                #cfdataSingBoxPanel .cf-sb-card { min-height:58px;padding:8px 9px; }
                 #cfdataSingBoxPanel .cf-sb-value { font-size:18px; }
+                #cfdataSingBoxPanel .cf-sb-form-grid,
+                #cfdataSingBoxPanel .cf-sb-test-grid { grid-template-columns:1fr; }
+                #cfdataSingBoxPanel .cf-sb-form-grid .cf-sb-full { grid-column:auto; }
+                #cfdataSingBoxPanel .cf-sb-speed-row { grid-template-columns:1fr; }
+                #cfdataSingBoxPanel .cf-sb-form-label { margin-top:2px; }
                 #cfdataSingBoxPanel .cf-sb-filter-row { align-items:stretch; }
                 #cfdataSingBoxPanel .cf-sb-filter-row input,
                 #cfdataSingBoxPanel .cf-sb-filter-row select,
@@ -161,10 +199,10 @@
         </style>
         <div id="cfdataSingBoxPanel" class="section-box" style="margin-top:0;">
             <div class="cf-sb-hero">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div class="cf-sb-top">
                 <div>
                     <h3 style="margin:0;">🛰️ reF1nd sing-box R</h3>
-                    <div style="font-size:12px;color:var(--text-secondary);margin-top:6px;line-height:1.75;max-width:900px;">
+                    <div style="font-size:12px;color:var(--text-secondary);margin-top:5px;line-height:1.65;">
                         reF1nd / SFA 风格 Libbox 负责真实代理连接；CFData 只负责节点整理、重复测试、排序、测速和结果展示。<br>
                         <b>真延迟</b> = 3 次独立真实 HTTP 请求经指定 outbound 到 CF trace；不再使用 TCPing、HTTPing 或 TLS 倍率。<br>
                         <b>测速</b> = 延迟排序完成后，按排序逐节点经同一个 working outbound 连续下载 6 秒，沿用 CFData 的窗口测速思路。
@@ -186,18 +224,17 @@
             </div>
 
             <div class="cf-sb-section">
-                <div style="font-weight:700;margin-bottom:10px;">添加 / 编辑 sing-box R Provider</div>
-                <div style="display:grid;grid-template-columns:minmax(160px,240px) 1fr;gap:10px;">
-                    <input id="cfSBName" maxlength="120" placeholder="订阅名称，例如：主订阅">
-                    <input id="cfSBUrl" type="url" placeholder="https://example.com/subscription">
+                <div style="font-weight:700;margin-bottom:7px;">添加与编辑</div>
+                <div class="cf-sb-form-grid">
+                    <div class="cf-sb-form-label">订阅名称</div>
+                    <input id="cfSBName" class="cf-sb-form-input" maxlength="120" placeholder="例如：主订阅">
+                    <div class="cf-sb-form-label cf-sb-full">订阅连接</div>
+                    <input id="cfSBUrl" class="cf-sb-form-input cf-sb-full" type="url" placeholder="https://example.com/subscription">
+                    <div class="cf-sb-form-label cf-sb-full">请求头（可选）</div>
+                    <textarea id="cfSBHeaders" class="cf-sb-form-input cf-sb-full" rows="2" spellcheck="false" placeholder='JSON，例如 {"User-Agent":"v2rayNG/2.2.6","Connection":"close","Accept-Encoding":"gzip"}' style="resize:vertical;min-height:54px;"></textarea>
+                    <div class="cf-sb-muted cf-sb-full" style="line-height:1.5;">这里只影响拉取订阅的 HTTP 请求头，不改变真连接测试。</div>
                 </div>
-                <div style="margin-top:10px;">
-                    <textarea id="cfSBHeaders" rows="3" spellcheck="false" placeholder='可选：订阅请求头 JSON，例如 {"User-Agent":"v2rayNG/2.2.6","Connection":"close","Accept-Encoding":"gzip"}' style="width:100%;box-sizing:border-box;resize:vertical;min-height:72px;"></textarea>
-                    <div style="font-size:11px;color:var(--text-secondary);margin-top:5px;line-height:1.6;">
-                        这里只影响“拉取订阅”的 HTTP 请求头，不会改变真连接测试的请求。留空即可。
-                    </div>
-                </div>
-                <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     <button class="action-btn export-btn" id="cfSBSave">💾 保存并同步</button>
                     <button class="action-btn" id="cfSBSaveOnly">只保存</button>
                     <button class="action-btn" id="cfSBCancel">取消编辑</button>
@@ -206,32 +243,32 @@
             </div>
 
             <div class="cf-sb-section">
-                <div style="font-weight:700;margin-bottom:8px;">⚡ 真连接测速参数</div>
-                <div style="display:grid;grid-template-columns:160px minmax(220px,1fr);gap:10px;align-items:center;">
-                    <div style="font-size:12px;color:var(--text-secondary);">延迟测试</div>
-                    <div style="font-size:12px;">3 次独立真实 HTTP 请求 · 单次超时 3 秒 · 无倍率</div>
-                    <div style="font-size:12px;color:var(--text-secondary);">延迟并发</div>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;">
-                        <select id="cfSBLatencyConcurrency" style="min-width:120px;">
-                            ${LATENCY_CONCURRENCY_OPTIONS.map(value => `<option value="${value}">${value} 个节点并行</option>`).join('')}
-                        </select>
-                        <span style="color:var(--text-secondary);">只影响批量延迟阶段；每节点仍按 3 次请求计算丢包率/平均延迟，下载测速仍逐节点进行。</span>
+                <div style="font-weight:700;margin-bottom:7px;">⚡ 真连接测速参数</div>
+                <div class="cf-sb-test-grid">
+                    <div style="font-size:12px;color:var(--text-secondary);">延迟</div>
+                    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap;font-size:12px;min-width:0;">
+                        <span>3 次独立请求 · 单次 3 秒超时</span>
+                        <label style="display:flex;align-items:center;gap:5px;">并发
+                            <select id="cfSBLatencyConcurrency" style="min-width:92px;">
+                                ${LATENCY_CONCURRENCY_OPTIONS.map(value => `<option value="${value}">${value}</option>`).join('')}
+                            </select>
+                        </label>
                     </div>
                     <div style="font-size:12px;color:var(--text-secondary);">排序</div>
-                    <div style="font-size:12px;">成功优先 → 丢包率低 → 平均真延迟低 → 最大真延迟低</div>
-                    <div style="font-size:12px;color:var(--text-secondary);">下载测速</div>
-                    <div style="font-size:12px;">延迟阶段完成后排序 · 通过节点逐节点测速 · 连续下载 6 秒 · 按真实 MB/s 比较</div>
+                    <div style="font-size:12px;min-width:0;">成功优先 → 丢包率低 → 平均真延迟低 → 最大真延迟低</div>
+                    <div style="font-size:12px;color:var(--text-secondary);">测速</div>
+                    <div style="font-size:12px;min-width:0;">通过延迟后逐节点连续下载 6 秒</div>
                     <div style="font-size:12px;color:var(--text-secondary);">测速地址</div>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <select id="cfSBSpeedUrlPreset" style="min-width:160px;flex:0 0 auto;">
+                    <div class="cf-sb-speed-row">
+                        <select id="cfSBSpeedUrlPreset" style="min-width:0;width:100%;">
                             <option value="auto">自动选择</option>
                             <option value="${CLOUDFLARE_SPEED_URL}">Cloudflare</option>
                             <option value="${CM_SPEED_URL}">CM提供</option>
                             <option value="${MOBILE_SPEED_URL}">移动专属</option>
                             <option value="custom">自定义</option>
                         </select>
-                        <input id="cfSBSpeedUrl" type="text" value="" placeholder="测速 URL，例如 speed.okl.abrdns.com" style="flex:1;min-width:220px;">
-                        <button class="action-btn" id="cfSBSpeedUrlReset" type="button">↺</button>
+                        <input id="cfSBSpeedUrl" type="text" value="" placeholder="测速 URL" style="min-width:0;width:100%;">
+                        <button class="action-btn" id="cfSBSpeedUrlReset" type="button" style="min-width:38px;">↺</button>
                     </div>
                 </div>
             </div>
@@ -438,13 +475,13 @@
             const id = esc(item.id || '');
             const disabled = state.running ? ' disabled' : '';
             return `<tr>
-                <td style="padding:10px;border-bottom:1px solid var(--border-color);"><b>${esc(item.name || '(未命名)')}</b></td>
-                <td style="padding:10px;border-bottom:1px solid var(--border-color);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(item.url || '')}">${esc(item.url || '')}</td>
-                <td style="padding:10px;border-bottom:1px solid var(--border-color);">${subStatus(item)}</td>
-                <td style="padding:10px;border-bottom:1px solid var(--border-color);">${Number(item.nodeCount || 0)}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);"><b>${esc(item.name || '(未命名)')}</b></td>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(item.url || '')}">${esc(item.url || '')}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);">${subStatus(item)}</td>
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);">${Number(item.nodeCount || 0)}</td>
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);font-size:11px;word-break:break-all;">${esc(item.configPath || '-')}</td>
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);font-size:11px;word-break:break-all;">${esc(item.providerPath || '-')}</td>
-                <td style="padding:10px;border-bottom:1px solid var(--border-color);"><div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);"><div style="display:flex;gap:6px;flex-wrap:wrap;">
                     <button class="action-btn"${disabled} onclick="window.__cfSBEdit('${id}')">编辑</button>
                     <button class="action-btn export-btn"${disabled} onclick="window.__cfSBSync('${id}')">更新</button>
                     <button class="action-btn"${disabled} onclick="window.__cfSBDiagnose('${id}')">诊断</button>
@@ -637,17 +674,20 @@
     async function diagnose(id) {
         try {
             const data = await api(`/api/subscription/singbox/diagnostics?id=${encodeURIComponent(id)}`);
-            const providerState = data.providerExists ? `存在，${Number(data.providerBytes || 0)} bytes` : '不存在';
-            const valid = data.providerValid ? '有效 JSON 节点缓存' : '无效/空缓存';
             const nodeCount = Number(data.nodeCount || 0);
-            appendMainLog(`🔎 诊断「${data.name || id}」：Provider1 ${providerState}，${valid}，节点 ${nodeCount}`);
+            let core = null;
+            try { core = bridgeCall('singBoxStatus', {}); } catch (_) {}
+            const providerOK = !!data.providerExists && !!data.providerValid && nodeCount > 0;
+            const configOK = !!data.configExists;
+            const coreText = core?.serviceStarted ? '✅ Core 已启动' : '⚪ Core 未启动（尚未执行真连接）';
+            appendMainLog(`🔎 诊断「${data.name || id}」：${providerOK ? '✅ Provider1 有效' : '❌ Provider1 无效'} · 节点 ${nodeCount} · ${configOK ? '✅ 配置存在' : '❌ 配置缺失'} · ${coreText}`);
             appendMainLog(`📁 配置：${data.configPath || '-'}；Provider：${data.providerPath || '-'}`);
             if (data.providerParseError) appendMainLog(`❌ Provider 解析：${data.providerParseError}`);
             if (data.logTail && String(data.logTail).trim() && data.logTail !== '（暂无 Provider1.update.log）') {
                 appendMainLog('🧾 最后一次 Provider 核心日志：');
                 String(data.logTail).split(/\n| \| /).forEach(line => { const t = String(line).trim(); if (t) appendMainLog(t); });
             }
-            status(`诊断完成：${nodeCount} 个节点` + (data.providerExists ? '' : '，Provider1.json 不存在'), nodeCount === 0);
+            status(`诊断完成：${providerOK ? '✅ Provider 已就绪' : '❌ Provider 有问题'} · ${nodeCount} 节点`, !providerOK);
         } catch (error) {
             status(`诊断失败：${error.message}`, true);
         }
@@ -801,12 +841,12 @@
             return;
         }
         body.innerHTML = visible.map((node) => `<tr>
-            <td style="padding:10px;border-bottom:1px solid var(--border-color);"><b>${esc(node.name || '-')}</b></td>
+            <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);"><b>${esc(node.name || '-')}</b></td>
             <td style="padding:10px;border-bottom:1px solid var(--border-color);font-family:ui-monospace,monospace;">${esc(node.server || '-')} : ${esc(node.port || '-')}</td>
-            <td style="padding:10px;border-bottom:1px solid var(--border-color);">${esc(node.protocol || '-')}</td>
-            <td style="padding:10px;border-bottom:1px solid var(--border-color);"><button class="action-btn" onclick="window.__cfSBSource('${esc(node.id)}')">${Number(node.sourceCount || 0)} 个来源</button></td>
-            <td style="padding:10px;border-bottom:1px solid var(--border-color);">${resultText(node.lastTest)}</td>
-            <td style="padding:10px;border-bottom:1px solid var(--border-color);"><button class="action-btn export-btn" ${state.running ? 'disabled' : ''} onclick="window.__cfSBTest('${esc(node.id)}')">🚀 测试</button></td>
+            <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);">${esc(node.protocol || '-')}</td>
+            <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);"><button class="action-btn" onclick="window.__cfSBSource('${esc(node.id)}')">${Number(node.sourceCount || 0)} 个来源</button></td>
+            <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);">${resultText(node.lastTest)}</td>
+            <td style="padding:7px 8px;border-bottom:1px solid var(--border-color);"><button class="action-btn export-btn" ${state.running ? 'disabled' : ''} onclick="window.__cfSBTest('${esc(node.id)}')">🚀 测试</button></td>
         </tr>`).join('');
     }
 
@@ -961,7 +1001,9 @@
             node.lastTest = latency;
             renderNodes(state.nodes);
             if (!latency.success) {
-                status(`${node.name || id}：真连接延迟测试失败`, true);
+                const detail = String(latency.error || '未返回具体错误');
+                appendMainLog(`❌ ${node.name || id}：真连接延迟测试失败 · ${detail}`);
+                status(`${node.name || id}：真连接延迟测试失败 · ${detail}`, true);
                 return;
             }
             setPhase('speed');
@@ -1030,7 +1072,9 @@
             }
             renderNodes(state.nodes);
             const speedOK = state.nodes.filter(node => node.lastTest?.speedSuccess).length;
-            status(`批量真连接测试完成：${latencyPassed.length}/${nodes.length} 通过延迟，${speedOK}/${latencyPassed.length} 完成测速。`, false);
+            const failedPreview = nodes.filter(node => node.lastTest && !node.lastTest.success).slice(0, 3)
+                .map(node => `${node.name || node.id}: ${String(node.lastTest.error || '未知错误')}`).join('；');
+            status(`批量真连接测试完成：${latencyPassed.length}/${nodes.length} 通过延迟，${speedOK}/${latencyPassed.length} 完成测速。${failedPreview ? ` 首个失败：${failedPreview}` : ''}`, false);
         } catch (error) {
             status(`批量测试失败：${error.message}`, true);
         } finally {
@@ -1047,7 +1091,7 @@
         if (!node || !modal) return;
         document.getElementById('cfSBModalTitle').textContent = `${node.server}:${node.port} · 来源`;
         document.getElementById('cfSBModalBody').innerHTML = (node.sources || []).map((item) => `
-            <div style="padding:10px;border:1px solid var(--border-color);border-radius:10px;margin-bottom:8px;">
+            <div style="padding:8px;border:1px solid var(--border-color);border-radius:9px;margin-bottom:6px;">
                 <b>${esc(item.subscriptionName || '')}</b>
                 <div style="font-size:12px;color:var(--text-secondary);word-break:break-all;margin-top:5px;">${esc(item.subscriptionUrl || '')}</div>
                 <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Provider：${esc(item.providerTag || '')} · 节点标签：${esc(item.nodeTag || '')}</div>

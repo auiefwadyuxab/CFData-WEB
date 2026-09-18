@@ -3,6 +3,7 @@ package com.cfdata.web.singbox
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
+import android.system.OsConstants
 import io.nekohasekai.libbox.AutoRedirectHandler
 import io.nekohasekai.libbox.AutoRedirectSession
 import io.nekohasekai.libbox.BridgeOptions
@@ -20,6 +21,7 @@ import io.nekohasekai.libbox.ShellSession
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
+import java.net.Inet6Address
 import java.net.NetworkInterface as JNetworkInterface
 
 class CFDataPlatformInterface : PlatformInterface {
@@ -50,44 +52,78 @@ class CFDataPlatformInterface : PlatformInterface {
     }
 
     override fun getInterfaces(): NetworkInterfaceIterator {
+        // This project runs sing-box in standalone Libbox mode, but reF1nd still
+        // asks the platform interface when auto_detect_interface is enabled.
+        // Mirror SFA's implementation closely so Android's IPv6 scoped address
+        // (for example fe80::...%rmnet_data2) never reaches netip.ParsePrefix,
+        // and make sure interfaces carry IFF_UP/IFF_RUNNING flags.
         val javaInterfaces = runCatching {
             val enumeration = JNetworkInterface.getNetworkInterfaces()
             if (enumeration == null) {
                 emptyList()
             } else {
                 buildList {
-                    while (enumeration.hasMoreElements()) {
-                        add(enumeration.nextElement())
-                    }
+                    while (enumeration.hasMoreElements()) add(enumeration.nextElement())
                 }
             }
         }.getOrElse { emptyList() }
+
         val result = mutableListOf<NetworkInterface>()
-        val networks = connectivity.allNetworks
-        for (network in networks) {
+        for (network in connectivity.allNetworks) {
             val link = connectivity.getLinkProperties(network) ?: continue
             val caps = connectivity.getNetworkCapabilities(network) ?: continue
             val name = link.interfaceName ?: continue
             val javaInterface = javaInterfaces.firstOrNull { it.name == name } ?: continue
+
             val item = NetworkInterface()
             item.name = name
             item.index = javaInterface.index
             item.mtu = runCatching { javaInterface.mtu }.getOrDefault(1500)
             item.dnsServer = StringArray(link.dnsServers.mapNotNull { it.hostAddress }.iterator())
-            item.gateway = StringArray(link.routes.mapNotNull { it.gateway?.hostAddress }.iterator())
-            item.addresses = StringArray(javaInterface.interfaceAddresses.map { address ->
-                "${address.address.hostAddress}/${address.networkPrefixLength}"
-            }.iterator())
+            item.gateway = StringArray(
+                link.routes
+                    .filter { it.destination.prefixLength == 0 }
+                    .mapNotNull { it.gateway }
+                    .filterNot { it.isAnyLocalAddress }
+                    .mapNotNull { it.hostAddress }
+                    .iterator(),
+            )
+            item.addresses = StringArray(
+                javaInterface.interfaceAddresses.mapNotNull { it.address?.let { address ->
+                    addressPrefix(address, it.networkPrefixLength)
+                } }.iterator(),
+            )
             item.type = when {
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> io.nekohasekai.libbox.Libbox.InterfaceTypeWIFI
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> io.nekohasekai.libbox.Libbox.InterfaceTypeCellular
                 caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> io.nekohasekai.libbox.Libbox.InterfaceTypeEthernet
                 else -> io.nekohasekai.libbox.Libbox.InterfaceTypeOther
             }
+            var flags = 0
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                flags = flags or OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+            }
+            if (javaInterface.isLoopback) flags = flags or OsConstants.IFF_LOOPBACK
+            if (javaInterface.isPointToPoint) flags = flags or OsConstants.IFF_POINTOPOINT
+            if (javaInterface.supportsMulticast()) flags = flags or OsConstants.IFF_MULTICAST
+            item.flags = flags
             item.metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             result.add(item)
         }
         return InterfaceArray(result.iterator())
+    }
+
+    private fun addressPrefix(address: java.net.InetAddress, prefixLength: Int): String {
+        // Inet6Address.hostAddress may include a scope id (%rmnet_data2). The
+        // sing-box platform wrapper converts this string with netip.MustParsePrefix,
+        // which intentionally rejects scoped IPv6 prefixes. Rebuild the IPv6 address
+        // from raw bytes to drop the Java scope before appending the prefix length.
+        val host = if (address is Inet6Address) {
+            Inet6Address.getByAddress(address.address).hostAddress
+        } else {
+            address.hostAddress
+        }
+        return "$host/$prefixLength"
     }
 
     override fun underNetworkExtension(): Boolean = false
