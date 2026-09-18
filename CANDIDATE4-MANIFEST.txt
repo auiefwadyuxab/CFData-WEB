@@ -1,0 +1,20 @@
+CFData-WEB v10 candidate4
+Date: 2026-09-19
+Base: v10 candidate3 / Actions run 35370575412 commit 2a1e86ccabf97fdd2afbe5223eb9b3bbc9366297
+
+CI repair:
+- Android SDK installation retained as explicit sdkmanager package arguments; run 35370575412 confirms this stage now succeeds.
+- AGP 9 built-in Kotlin migration completed: removed org.jetbrains.kotlin.android from root/module and removed legacy android.kotlinOptions.
+- CI validation now fails early if the old Kotlin plugin/options return and logs the Gradle/AGP toolchain before assembleRelease.
+
+Core:
+- reF1nd Libbox AAR build path retained unchanged; run 35370575412 confirms the source-backed Libbox AAR stage succeeds.
+- True test remains direct in-process sing-box outbound, no TUN/mixed/root; 3 latency attempts with loss + avg/min/max retained.
+- Subscription staged Provider1.json.next promotion and last-known-good cache protection retained.
+
+UI:
+- Sing-box R panel redesigned with responsive summary cards, sticky table headers, clearer status indicator, result metrics, and persisted latency concurrency (8/16/24/32/48/64; default 16).
+- Sync/test phase is surfaced in the panel; download phase remains serial after latency sorting.
+- CSS uses broadly compatible fallbacks for Android WebView.
+
+Status: candidate only; not a successful v10.

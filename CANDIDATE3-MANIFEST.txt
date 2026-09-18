@@ -1,9 +1,0 @@
-CFData-WEB v10 candidate3
-Date: 2026-09-19
-Base: v10 candidate2 / Actions run 35369163757 commit 2a1e86ccabf97fdd2afbe5223eb9b3bbc9366297
-Fix: Android SDK packages installed via explicit sdkmanager arguments instead of multiline setup-android packages input
-UI: configurable latency concurrency 8/16/24/32/48/64, default 16, persisted locally
-Core: reF1nd Libbox AAR build path retained unchanged because it succeeded in run 35369163757
-True test: direct in-process sing-box outbound, no TUN/mixed/root; 3 latency attempts, loss + avg/min/max retained
-Subscription: staged Provider1.json.next promotion and old-cache protection retained
-Status: candidate only; not a successful v10

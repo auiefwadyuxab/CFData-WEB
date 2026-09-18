@@ -63,6 +63,12 @@ jobs:
           test -s combined_refactor/subscriptions.go
           test -s combined_refactor/singbox.go
           test -s combined_refactor/server.go
+          test -s build.gradle
+          test -s app/build.gradle
+          if grep -RInE 'org\.jetbrains\.kotlin\.android|kotlinOptions' build.gradle app/build.gradle; then
+            echo "AGP 9 built-in Kotlin migration incomplete: old Kotlin Android plugin/options remain" >&2
+            exit 1
+          fi
           test -s app/src/main/assets/singbox-r-template.json
           grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
           grep -Fq 'id="singboxRControls"' combined_refactor/index.html
@@ -413,10 +419,20 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
 
+      - name: Verify Gradle / AGP toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --version
+          test -f gradle/wrapper/gradle-wrapper.properties
+          grep -Fq 'gradle-9.7.0-bin.zip' gradle/wrapper/gradle-wrapper.properties
+          grep -Fq 'version \"9.3.1\"' build.gradle
+          echo "AGP 9.3.1 + Gradle 9.7.0 toolchain selected."
+
       - name: Build release APK
         env:
           ANDROID_VERSION_NAME: ${{ steps.set-version.outputs.VERSION }}
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Verify APK Contains Backend and Libbox
         shell: bash
