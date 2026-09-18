@@ -20,9 +20,14 @@ on:
 permissions:
   contents: write
 
+env:
+  GO_VERSION: "1.26.8"
+  GOTOOLCHAIN: "local"
+  REF1ND_RELEASE_INFO_URL: "https://raw.githubusercontent.com/reF1nd/sing-box-releases/dev/testing-build-info.json"
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -43,18 +48,14 @@ jobs:
             ext: ".exe"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
+        uses: actions/checkout@v7
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.25.4"
+          go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: combined_refactor/go.sum
 
       - name: Validate sing-box R subscription integration
         run: |
@@ -62,7 +63,7 @@ jobs:
           test -s combined_refactor/subscriptions.go
           test -s combined_refactor/singbox.go
           test -s combined_refactor/server.go
-          test -s singbox-r-template.json
+          test -s app/src/main/assets/singbox-r-template.json
           grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
           grep -Fq 'id="singboxRControls"' combined_refactor/index.html
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
@@ -131,17 +132,106 @@ jobs:
           done
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: asset-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext || '' }}
           path: release_assets/*
 
+  resolve-ref1nd-testing:
+    name: Resolve latest reF1nd testing source
+    runs-on: ubuntu-26.04
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve current testing build metadata
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          info="$RUNNER_TEMP/ref1nd-testing-build-info.json"
+          curl -fsSL --retry 4 --connect-timeout 10 \
+            "$REF1ND_RELEASE_INFO_URL" -o "$info"
+          jq -e '(.version | type == "string") and (.source_sha | test("^[0-9a-f]{40}$"))' "$info" >/dev/null
+          source_sha=$(jq -r '.source_sha' "$info")
+          version=$(jq -r '.version' "$info")
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Latest reF1nd testing build: $version"
+          echo "Source SHA: $source_sha"
+          cat "$info"
+
+  build-ref1nd-libbox:
+    name: Build reF1nd Libbox AAR (Android arm64)
+    runs-on: ubuntu-26.04
+    needs: resolve-ref1nd-testing
+    steps:
+      - name: Checkout reF1nd sing-box source
+        uses: actions/checkout@v7
+        with:
+          repository: reF1nd/sing-box
+          ref: ${{ needs.resolve-ref1nd-testing.outputs.source_sha }}
+          path: ref1nd-sing-box
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: ref1nd-sing-box/go.sum
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28
+
+      - name: Build source-backed Libbox
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ref1nd-sing-box
+          test "$(git rev-parse HEAD)" = "${{ needs.resolve-ref1nd-testing.outputs.source_sha }}"
+          required_go=$(awk '$1 == "go" {print $2; exit}' go.mod)
+          test -n "$required_go"
+          if [ "$(printf '%s\n' "$required_go" "$GO_VERSION" | sort -V | head -1)" != "$required_go" ]; then
+            echo "reF1nd source requires Go $required_go, but CI provides $GO_VERSION" >&2
+            exit 1
+          fi
+          echo "reF1nd source requires Go >= $required_go; CI uses $GO_VERSION"
+          make lib_install
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go" daemon/cfdata_true_test.go
+          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go" experimental/libbox/cfdata.go
+          gofmt -w daemon/cfdata_true_test.go experimental/libbox/cfdata.go
+          go run ./cmd/internal/build_libbox -target android -platform android/arm64
+          test -s libbox.aar
+          test -s libbox-legacy.aar
+          mkdir -p "$RUNNER_TEMP/ref1nd-aar"
+          cp libbox.aar libbox-legacy.aar "$RUNNER_TEMP/ref1nd-aar/"
+          ls -lh "$RUNNER_TEMP/ref1nd-aar/"
+
+      - name: Upload Libbox AAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: ref1nd-libbox-arm64
+          path: ${{ runner.temp }}/ref1nd-aar/*
+          compression-level: 0
+
   android-apk:
     name: Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    needs: [resolve-ref1nd-testing, build-ref1nd-libbox]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -150,53 +240,51 @@ jobs:
           java-version: "17"
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
-          go-version: "1.25.4"
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
           cache-dependency-path: combined_refactor/go.sum
 
-      # Do not let setup-android try to install the removed legacy "tools" package.
-      # Install only the SDK command-line tools here; required SDK packages are
-      # installed explicitly in the next step.
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
-          packages: ''
-
-      - name: Install Android SDK Packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          packages: |
+            platform-tools
+            platforms;android-37.0
+            build-tools;37.0.0
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
 
       - name: Set Version
         id: set-version
         run: |
+          set -euo pipefail
           version="${{ github.event.inputs.version }}"
           if [ -z "$version" ]; then
             version="${{ github.ref_name }}"
           fi
-          echo "VERSION=$version" >> $GITHUB_OUTPUT
+          echo "VERSION=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download CA Certificates
         run: |
+          set -euo pipefail
           curl -fsSL --retry 3 --connect-timeout 10 \
             https://curl.se/ca/cacert.pem \
             -o combined_refactor/ca-certificates.crt
+          test -s combined_refactor/ca-certificates.crt
 
-      - name: Validate sing-box R subscription integration (Android)
+      - name: Validate CFData / reF1nd integration
+        shell: bash
         run: |
           set -euo pipefail
           test -s combined_refactor/subscriptions.go
           test -s combined_refactor/singbox.go
           test -s combined_refactor/server.go
-          test -s singbox-r-template.json
+          test -s app/src/main/assets/singbox-r-template.json
+          test -s app/src/main/assets/singbox-engine.json
+          test ! -e app/libs/libbox.aar
           grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
           grep -Fq 'id="singboxRControls"' combined_refactor/index.html
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
@@ -214,66 +302,39 @@ jobs:
             echo "旧订阅 WebSocket 入口仍存在" >&2
             exit 1
           fi
-          test -s third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
-          test -s third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
-          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
-          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
           if grep -RInE 'CFDataTrueTest' third_party/ref1nd-libbox-overrides; then
             echo "旧的合并式 CFDataTrueTest override 仍存在" >&2
             exit 1
           fi
           if grep -RInE 'su -c|findSuBinary|libsingbox|CFDATA_SINGBOX_PATH' app/src/main/java/com/cfdata/web/singbox app/src/main/java/com/cfdata/web/MainActivity.java; then
-            echo "Android Libbox 真连接路径仍包含旧 standalone/root 启动逻辑" >&2
+            echo "Android 真连接路径仍包含旧 standalone/root 启动逻辑" >&2
             exit 1
           fi
-          echo "sing-box R subscription integration checks passed for Android build."
-
-      - name: Install Android 17 Preview SDK and NDK for reF1nd Libbox build
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Android 17 / API 37 is currently distributed as minor-versioned SDK
-          # platforms. The published platform package is android-37.0 rather than
-          # the nonexistent plain android-37 coordinate.
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-37.0" \
-            "build-tools;37.0.0" \
-            "ndk;28.0.13004108"
-
-      - name: Build reF1nd Libbox Android AAR
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf "$RUNNER_TEMP/ref1nd-sing-box"
-          git clone --depth 1 --branch reF1nd-testing https://github.com/reF1nd/sing-box.git "$RUNNER_TEMP/ref1nd-sing-box"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
-          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-          cd "$RUNNER_TEMP/ref1nd-sing-box"
-          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go" daemon/cfdata_true_test.go
-          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go" experimental/libbox/cfdata.go
-          go run ./cmd/internal/build_libbox -target android -platform android/arm64
-          test -s libbox.aar
-          mkdir -p "$GITHUB_WORKSPACE/app/libs"
-          cp libbox.aar "$GITHUB_WORKSPACE/app/libs/libbox.aar"
-          ls -lh "$GITHUB_WORKSPACE/app/libs/libbox.aar"
-
-      - name: Copy CFData sing-box runtime assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp singbox-engine.json app/src/main/assets/singbox-engine.json
-          cp singbox-r-template.json app/src/main/assets/singbox-r-template.json
-          test -s app/src/main/assets/singbox-engine.json
-          test -s app/src/main/assets/singbox-r-template.json
           python3 - <<'PY'
           import json
-          for path in ("singbox-engine.json", "singbox-r-template.json"):
-              with open(path, "r", encoding="utf-8") as f:
+          for path in (
+              'app/src/main/assets/singbox-engine.json',
+              'app/src/main/assets/singbox-r-template.json',
+          ):
+              with open(path, 'r', encoding='utf-8') as f:
                   json.load(f)
-              print("JSON OK:", path)
+              print('JSON OK:', path)
           PY
+
+      - name: Download source-built Libbox
+        uses: actions/download-artifact@v8
+        with:
+          name: ref1nd-libbox-arm64
+          path: ref1nd-aar
+
+      - name: Install Libbox AAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ref1nd-aar/libbox.aar
+          mkdir -p app/libs
+          cp ref1nd-aar/libbox.aar app/libs/libbox.aar
+          ls -lh app/libs/libbox.aar
 
       - name: Build Android backend
         working-directory: combined_refactor
@@ -282,7 +343,11 @@ jobs:
           GOARCH: arm64
           CGO_ENABLED: "0"
         run: |
-          go build -ldflags "-s -w -X main.appVersion=${{ steps.set-version.outputs.VERSION }}" -o ../app/src/main/jniLibs/arm64-v8a/libcfdata.so .
+          set -euo pipefail
+          mkdir -p ../app/src/main/jniLibs/arm64-v8a
+          go build -trimpath -ldflags "-s -w -X main.appVersion=${{ steps.set-version.outputs.VERSION }}" \
+            -o ../app/src/main/jniLibs/arm64-v8a/libcfdata.so .
+          test -s ../app/src/main/jniLibs/arm64-v8a/libcfdata.so
 
       - name: Prepare Release Keystore
         env:
@@ -292,7 +357,6 @@ jobs:
           ANDROID_KEY_PASSWORD_SECRET: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
           if [ -n "$ANDROID_KEYSTORE_BASE64" ] && \
              [ -n "$ANDROID_KEYSTORE_PASSWORD_SECRET" ] && \
              [ -n "$ANDROID_KEY_ALIAS_SECRET" ] && \
@@ -312,7 +376,6 @@ jobs:
             keystore_file="$RUNNER_TEMP/cfdata-ci-release.keystore"
             ci_password="${GITHUB_RUN_ID}-cfdata"
             key_alias="cfdata-ci"
-
             keytool -genkeypair \
               -v \
               -keystore "$keystore_file" \
@@ -323,7 +386,6 @@ jobs:
               -keysize 2048 \
               -validity 3650 \
               -dname "CN=CFData-WEB CI, OU=Build, O=CFData-WEB, C=US"
-
             chmod 600 "$keystore_file"
             {
               echo "ANDROID_KEYSTORE_FILE=$keystore_file"
@@ -338,23 +400,33 @@ jobs:
           ANDROID_VERSION_NAME: ${{ steps.set-version.outputs.VERSION }}
         run: ./gradlew assembleRelease --no-daemon
 
-      - name: Verify APK Contains Backend
+      - name: Verify APK Contains Backend and Libbox
+        shell: bash
         run: |
-          unzip -l app/build/outputs/apk/release/app-release.apk | tee apk-contents.txt
+          set -euo pipefail
+          apk="app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+          unzip -l "$apk" | tee apk-contents.txt
           grep -q "lib/arm64-v8a/libcfdata.so" apk-contents.txt
-          unzip -l app/build/outputs/apk/release/app-release.apk "lib/arm64-v8a/libcfdata.so"
-          unzip -l app/build/outputs/apk/release/app-release.apk | grep -q "lib/arm64-v8a/libbox.so"
-          unzip -l app/build/outputs/apk/release/app-release.apk | grep -q "lib/arm64-v8a/libbox"
+          grep -q "lib/arm64-v8a/libbox.so" apk-contents.txt
 
-      - name: Prepare APK Asset
+      - name: Prepare APK Assets and Build Metadata
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release_assets
           cp app/build/outputs/apk/release/app-release.apk release_assets/cfdata-android-arm64.apk
+          printf '{\n  "cfdata_version": "%s",\n  "ref1nd_testing_version": "%s",\n  "ref1nd_source_sha": "%s"\n}\n' \
+            "${{ steps.set-version.outputs.VERSION }}" \
+            "${{ needs.resolve-ref1nd-testing.outputs.version }}" \
+            "${{ needs.resolve-ref1nd-testing.outputs.source_sha }}" \
+            > release_assets/cfdata-android-arm64.build-info.json
           cd release_assets
           sha256sum cfdata-android-arm64.apk | awk '{print $1}' > cfdata-android-arm64.apk.sha256
+          cat cfdata-android-arm64.build-info.json
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: asset-android-arm64-apk
           path: release_assets/*
@@ -362,15 +434,15 @@ jobs:
   release:
     name: Release
     needs: [build, android-apk]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: asset-*

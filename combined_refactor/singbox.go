@@ -434,6 +434,13 @@ func singBoxEngineConfigPath() string {
 	return filepath.Join(singBoxDataDir(), singBoxEngineConfigFile)
 }
 
+func cfdataConfigPath() string {
+	if dataDir := strings.TrimSpace(os.Getenv("CFDATA_DATA_DIR")); dataDir != "" {
+		return filepath.Join(dataDir, "cfdata-config.json")
+	}
+	return filepath.Join(filepath.Dir(os.Args[0]), "cfdata-config.json")
+}
+
 func defaultSingBoxEngineConfig() singBoxEngineConfig {
 	return singBoxEngineConfig{
 		Version:                9,

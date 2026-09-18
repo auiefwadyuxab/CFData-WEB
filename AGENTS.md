@@ -2,7 +2,7 @@
 
 ## Go 工具链
 - 路径: `/usr/local/go/bin/go`
-- 版本: Go 1.26.2
+- 版本: Go 1.26.8
 
 ## 编译测试版
 每次修改完成后，主动编译测试版到 `release_assets/cfdata-test`，覆盖原文件：

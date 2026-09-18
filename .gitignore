@@ -56,3 +56,6 @@ app/src/main/jniLibs/*/libcfdata.so
 # Windows alternate data stream artifacts copied into archives
 *.Zone.Identifier
 *Zone.Identifier*
+
+# ReF1nd Libbox is generated in CI; never commit prebuilt AARs
+app/libs/*.aar

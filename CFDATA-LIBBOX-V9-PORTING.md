@@ -8,6 +8,18 @@
 
 也就是说，CFData 的价值保留在“怎么比较节点”，而真正的代理连接、协议解析、TLS、DNS、detour、multiplex、各种 outbound 能力交给 reF1nd sing-box 核心。
 
+## 本次重新审计的架构结论
+
+这次重新核对后，决定**不把 `sing-box-for-android` 整个项目拷进 CFData，也不把 release APK/AAR 当作运行时依赖**。SFA 源码主要用于参考正确的 `CommandServer` / `StartedService` 生命周期；真正被 CFData 集成的是 `reF1nd/sing-box` 生成的 Libbox AAR。
+
+原因很直接：CFData 不是一个完整 VPN 客户端，不需要 TUN、系统代理、root shell、Shizuku、通知、Compose UI 等 SFA 应用层功能。把这些一起带入会显著增加构建和维护面，而且会让“真连接测试”与“系统 VPN 运行”纠缠在一起。
+
+当前实现因此保持三层边界：
+
+`CFData Web/Android 壳 → CommandServer → reF1nd Libbox outbound`
+
+其中只有 Libbox AAR 来自 reF1nd；Android 生命周期和批量测试调度由 CFData 自己掌控。
+
 ## Android 核心
 
 Android 端在 App 进程内初始化 reF1nd Libbox，并长期持有一个 `CommandServer` / `StartedService`，整体形态参考 SFA 的 core/service 组织方式。
@@ -151,12 +163,12 @@ Libbox AAR 本身保留 reF1nd sing-box 的核心能力。CFData 没有为了“
 
 GitHub Actions：
 
-1. 使用 Go 1.25.4 构建 CFData Web 后端
-2. 拉取 `reF1nd/sing-box` 的 `reF1nd-testing` 分支
-3. 注入本项目两个完整 override 文件
-4. 构建 `libbox.aar`
-5. 复制到 `app/libs/libbox.aar`
-6. 构建 Android APK
+1. 使用 Go 1.26.8 构建 CFData Web 后端；这是当前 reF1nd testing 发布链正在使用的 Go 工具链
+2. 从 `reF1nd/sing-box-releases` 的 `testing-build-info.json` 解析当前 testing 构建对应的 source SHA，并精确 checkout `reF1nd/sing-box`
+3. 注入本项目两个完整 override 文件后直接从该 source SHA 编译
+4. 按 reF1nd 官方构建方式执行 `make lib_install` 与 `cmd/internal/build_libbox`，生成 arm64 `libbox.aar`
+5. AAR 仅作为 CI artifact 传递，构建前临时复制到 `app/libs/libbox.aar`；仓库不保存二进制
+6. 使用当前 `reF1nd/sing-box-for-android` 的 `reF1nd-testing` 系列构建环境和当前 Android 17 / API 37 SDK 构建 APK
 
 Android 17 / API 37 目前属于 Cinnamon Bun Preview；Actions 使用与当前 SDK 发布方式匹配的 `platforms;android-37.0` 和 Build-Tools 37。
 
@@ -181,6 +193,8 @@ v9 明确把 CFData 原始工作流拆成两个阶段：
 `CFData = 怎么测、怎么比、怎么显示`
 
 ## CI 构建说明
+
+2026-09-18 重新审计：reF1nd 当前 testing build metadata 指向 `1.15.0-alpha.6-reF1nd`，source SHA 为 `9e5ea2101d9dbd4194f877814bb49b3de8c1487b`。本项目 CI 不再自己猜版本、也不把旧 sing-box 压缩包或 AAR 固化进仓库；每次构建均按当前 testing 发布元数据取对应源码。
 
 当前 Android 17 SDK 的平台包采用 minor-version 坐标。工程使用 `compileSdk 37` + `compileSdkMinor 0`，Actions 安装 `platforms;android-37.0` 与 `build-tools;37.0.0`；不会再请求不存在的 `platforms;android-37`。
 

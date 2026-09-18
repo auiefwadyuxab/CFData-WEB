@@ -395,7 +395,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			resetAllConfigFiles(session)
 		},
 		"get_config": func(data json.RawMessage) {
-			cfgPath := filepath.Join(filepath.Dir(os.Args[0]), "cfdata-config.json")
+			cfgPath := cfdataConfigPath()
 			raw, err := os.ReadFile(cfgPath)
 			if err != nil {
 				session.sendWSMessage("error", "读取配置文件失败: "+err.Error())

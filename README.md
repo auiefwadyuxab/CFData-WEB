@@ -18,10 +18,11 @@ CFData-Web 是一个基于 Go 的 Cloudflare IP 测试与筛选工具，提供�
 - 导出：支持 CSV/TXT、自定义字段、IP 类型筛选、合格结果筛选。
 - 上传：支持将导出结果上传到 GitHub。
 - APK：支持 Android WebView 壳运行内置后端。
+- reF1nd sing-box R：Android 端使用进程内 Libbox 做真实代理出站测试；不依赖 root、TUN 或 standalone sing-box。
 
 ## 快速开始
 
-从 [Releases](https://github.com/PoemMisty/CFData-WEB/releases/latest) 下载对应平台程序后运行。
+从 [Releases](https://github.com/auiefwadyuxab/CFData-WEB/releases/latest) 下载对应平台程序后运行。
 
 默认启动 Web 模式：
 
@@ -150,6 +151,16 @@ CLI 可通过 `-offurl`/`-nsburl` 指定：
 ```bash
 ./cfdata-linux-amd64 -h
 ```
+
+## reF1nd sing-box R 真连接
+
+Android 端的「sing-box R」只负责把订阅节点交给 reF1nd Libbox，并用真实 outbound 发起测试。CFData 自己保留节点去重、批量策略、排序、测速窗口和结果展示。
+
+真延迟默认执行 3 次独立 HTTPS 请求，记录真实 TTFB、outbound 建连、TLS 握手、丢包、出口 IP 和 Cloudflare Colo；不使用原 TCPing/HTTPing 延迟倍率。延迟阶段完成后，再按结果顺序逐节点连续下载 6 秒计算真实 MB/s。
+
+Android 构建时，GitHub Actions 会读取 `reF1nd/sing-box-releases` 当前 testing build metadata，按其中的 source SHA 从 `reF1nd/sing-box` 编译带 CFData override 的 `libbox.aar`。AAR 只存在于 CI 工作目录，不提交到仓库；同样不会在仓库内保存 standalone sing-box 二进制。
+
+本项目参考了 `reF1nd/sing-box-for-android` 的 `CommandServer` / `StartedService` 生命周期，以及 v2rayNG 的 Real Ping「核心负责真实出站、上层负责批量调度」思路，但没有把整套 SFA 应用作为依赖塞进 CFData。
 
 ## 本地缓存
 
