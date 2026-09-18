@@ -1,4 +1,4 @@
-# CFData-WEB v10 candidate：Real Ping/真连接重新审计
+# CFData-WEB v10 candidate2：Real Ping/真连接重新审计
 
 ## v2rayNG 对照结论
 
@@ -23,4 +23,14 @@ v2rayNG 当前 RealPingWorkerService 并不是依赖已经启动的 VPN/TUN 才�
 
 ## 本候选版命名
 
-这是从 v9 修正出来的候选版本，不能提前称为已成功的 v10。压缩包采用 `v10-candidate1` 命名；只有 GitHub Actions 全链路通过后，下一个成功归档才使用 v10。
+这是从 v9 / candidate1 继续修正后的第二个候选版本，不能提前称为已成功的 v10。本次完整压缩包采用 `v10-candidate2` 命名；只有 GitHub Actions 全链路通过后，成功归档才使用 v10。
+
+
+## candidate2 修正
+
+- Libbox daemon override 已从 `cfdata_true_test.go` 更名为生产文件 `cfdata_true.go`，避免 Go 将其排除在正常构建之外。
+- Android Provider 更新不再删除现有 `Provider1.json`；改为 `Provider1.json.next` 暂存，解析并确认节点后才提升为正式缓存。
+- 同步失败时继续保留上一份有效 Provider1.json；不再放宽既有 exclude 规则，避免把本应过滤的节点重新写回缓存。
+- 修复 `syncAllSingBoxSubscriptions` 重复 `defer Unlock()`。
+- sing-box 配置 fallback/migration 版本统一到 v10。
+- 本候选仍未通过新的 GitHub Actions 全链路验证，因此不能称为成功 v10。

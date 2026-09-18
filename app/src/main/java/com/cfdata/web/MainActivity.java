@@ -302,7 +302,7 @@ public class MainActivity extends Activity {
                 byte[] buffer = new byte[(int) Math.min(target.length(), 128 * 1024L)];
                 int read = in.read(buffer);
                 String text = read > 0 ? new String(buffer, 0, read, StandardCharsets.UTF_8) : "";
-                current = text.contains("\"version\": 9");
+                current = text.contains("\"version\": 10");
             }
         }
         if (current) return;

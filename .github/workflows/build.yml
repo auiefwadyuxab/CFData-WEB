@@ -69,8 +69,8 @@ jobs:
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
           grep -Fq 'singBoxTrueLatencyTest' app/src/main/assets/singbox-ui.js
           grep -Fq 'singBoxTrueSpeedTest' app/src/main/assets/singbox-ui.js
-          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
-          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go
+          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go
           grep -Fq 'handleSingBoxDiagnosticsAPI' combined_refactor/singbox.go
           grep -Fq 'Provider1.update.log' combined_refactor/singbox.go
           if grep -Eq 'id="btnSubscriptions"|subscriptionControls|subscriptionUserAgent' combined_refactor/index.html; then
@@ -81,7 +81,8 @@ jobs:
             echo "旧订阅 WebSocket 入口仍存在" >&2
             exit 1
           fi
-          test -s third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          test -s third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go
+          test ! -e third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
           test -s third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
           echo "sing-box R subscription integration checks passed."
 
@@ -211,15 +212,17 @@ jobs:
           echo "reF1nd source requires Go >= $required_go; CI uses $GO_VERSION"
           make lib_install
           export PATH="$(go env GOPATH)/bin:$PATH"
-          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go" daemon/cfdata_true_test.go
+          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go" daemon/cfdata_true.go
           cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go" experimental/libbox/cfdata.go
-          gofmt -w daemon/cfdata_true_test.go experimental/libbox/cfdata.go
+          gofmt -w daemon/cfdata_true.go experimental/libbox/cfdata.go
           go run ./cmd/internal/build_libbox -target android -platform android/arm64
           test -s libbox.aar
           test -s libbox-legacy.aar
           mkdir -p "$RUNNER_TEMP/ref1nd-aar"
           cp libbox.aar libbox-legacy.aar "$RUNNER_TEMP/ref1nd-aar/"
           ls -lh "$RUNNER_TEMP/ref1nd-aar/"
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Upload Libbox AAR
         uses: actions/upload-artifact@v7
@@ -293,8 +296,8 @@ jobs:
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
           grep -Fq 'singBoxTrueLatencyTest' app/src/main/assets/singbox-ui.js
           grep -Fq 'singBoxTrueSpeedTest' app/src/main/assets/singbox-ui.js
-          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
-          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          grep -Fq 'CFDataTrueLatencyTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go
+          grep -Fq 'CFDataTrueSpeedTest' third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go
           grep -Fq 'handleSingBoxDiagnosticsAPI' combined_refactor/singbox.go
           grep -Fq 'Provider1.update.log' combined_refactor/singbox.go
           if grep -Eq 'id="btnSubscriptions"|subscriptionControls|subscriptionUserAgent' combined_refactor/index.html; then

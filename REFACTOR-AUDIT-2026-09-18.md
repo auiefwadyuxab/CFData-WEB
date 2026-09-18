@@ -1,4 +1,4 @@
-# CFData-WEB v9 → v10 candidate 重构审计记录（2026-09-18）
+# CFData-WEB v9 → v10 candidate2 重构审计记录（2026-09-18）
 
 ## 结论
 
@@ -144,4 +144,21 @@ Android `MainActivity` 已把 backend 工作目录与 `CFDATA_DATA_DIR` 指向 a
 
 ## Candidate 版本编号
 
-本候选版尚未经过新的 GitHub Actions 完整成功验证，因此压缩包命名为 `CFData-WEB-v10-candidate1-2026-09-18.zip`。后续只有完整构建成功时才使用 `v10` 作为成功归档编号。
+以上是 candidate1 当时的归档记录。candidate2 的当前归档见 `CFDATA-LIBBOX-V10-CANDIDATE.md`，只有完整构建成功时才使用 `v10` 作为成功归档编号。
+
+
+## 2026-09-19 candidate2 追加审计
+
+### Libbox 生产文件命名
+
+`daemon/cfdata_true_test.go` 会被 Go 的正常生产构建排除。candidate2 改为 `daemon/cfdata_true.go`，并在 CI 中显式禁止旧 `_test.go` 文件回归。
+
+### Provider 更新保留策略
+
+reF1nd `ProviderRemote.StartContext` 会优先从现有 `path` 加载缓存，存在缓存时并不会在启动瞬间必然重新下载；因此“保留旧文件 + 原路径启动”不能同时满足“立即更新”。candidate2 使用同目录 `.next` 暂存路径触发初始抓取，验证 JSON 节点后再替换正式 `Provider1.json`。失败不触碰旧文件。
+
+SFA 的 `UpdateProfileWork` / 手动更新逻辑也采用“下载新内容、校验、成功后才写入；异常时保持旧文件”的原则，本实现保持这一语义。
+
+### 其他同步修正
+
+发现并修复 `syncAllSingBoxSubscriptions` 中重复 `defer singBoxSyncMu.Unlock()`；这不是编译错误，但属于必须在进入实机测试前排除的运行时错误。

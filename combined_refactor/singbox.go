@@ -443,7 +443,7 @@ func cfdataConfigPath() string {
 
 func defaultSingBoxEngineConfig() singBoxEngineConfig {
 	return singBoxEngineConfig{
-		Version:                9,
+		Version:                10,
 		LatencyTimeoutSeconds:  3,
 		SpeedDurationSeconds:   6,
 		SubscriptionRoot:       singBoxSubscriptionRootDefault,

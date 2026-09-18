@@ -30,8 +30,8 @@ SFA 的运行代码已经按 CFData 的包名和无 root 目标做了裁剪，�
 
 如果手工构建 reF1nd `Libbox`，把以下两个文件按目录放进去：
 
-`third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go`
-→ `reF1nd/sing-box/daemon/cfdata_true_test.go`
+`third_party/ref1nd-libbox-overrides/daemon/cfdata_true.go`
+→ `reF1nd/sing-box/daemon/cfdata_true.go`
 
 `third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go`
 → `reF1nd/sing-box/experimental/libbox/cfdata.go`
@@ -40,7 +40,7 @@ SFA 的运行代码已经按 CFData 的包名和无 root 目标做了裁剪，�
 
 ## 真连接测试的实际调用
 
-`CFDataTrueTest` 不创建本地代理入口，不启动新的进程，不检查 root。它直接从当前 `StartedService` 找指定 outbound，然后创建 HTTP Transport：其 `DialContext` 指向 sing-box `ResolveDialer`。因此 HTTP/TLS/目标站点的连接实际经过该 sing-box outbound。
+`CFDataTrueLatencyTest` / `CFDataTrueSpeedTest` 不创建本地代理入口，不启动新的进程，不检查 root。它直接从当前 `StartedService` 找指定 outbound，然后创建 HTTP Transport：其 `DialContext` 指向 sing-box `ResolveDialer`。因此 HTTP/TLS/目标站点的连接实际经过该 sing-box outbound。
 
 ## Provider
 

@@ -108,28 +108,30 @@ object CFDataSingBoxCore {
                 if (configText.isBlank()) {
                     throw IllegalArgumentException("订阅 $name 的 Core 配置为空")
                 }
-                if (providerPath.isNotBlank()) {
-                    File(providerPath).delete()
+                if (providerPath.isBlank()) {
+                    throw IllegalArgumentException("订阅 $name 的 Provider 路径为空")
                 }
-                runSyncAttempt(configText)
-                var count = waitForProviderNodes(providerPath, syncTimeoutSeconds)
-                if (count == 0) {
-                    // The UI keeps the configured exclude for normal operation, but
-                    // an over-aggressive filter must not make an otherwise usable
-                    // subscription appear broken.
-                    val fallback = clearProviderExcludes(configText)
-                    if (fallback != null && fallback != configText) {
-                        if (providerPath.isNotBlank()) {
-                            File(providerPath).delete()
-                        }
-                        runSyncAttempt(fallback)
-                        configText = fallback
-                        count = waitForProviderNodes(providerPath, syncTimeoutSeconds)
-                    }
-                }
+
+                // Never delete the last known-good Provider1.json before a refresh.
+                // reF1nd ProviderRemote treats an existing path as cache and may
+                // therefore skip the immediate fetch. Stage the refresh into a
+                // sibling *.next path: a missing staged file forces the provider to
+                // perform its initial fetch, and the old permanent file remains
+                // untouched until the new provider has been parsed and validated.
+                val stagedPath = providerPath + ".next"
+                deleteStagedProvider(stagedPath)
+                val stagedConfig = stageProviderConfig(configText)
+                runSyncAttempt(stagedConfig)
+                val count = waitForProviderNodes(stagedPath, syncTimeoutSeconds)
                 if (count <= 0) {
-                    throw IllegalStateException("Provider1.json 未生成可识别节点")
+                    deleteStagedProvider(stagedPath)
+                    throw IllegalStateException("Provider1.json 未生成可识别节点；已保留上一份有效缓存")
                 }
+
+                // Promote only after the staged provider is confirmed valid. The
+                // helper keeps a temporary backup so a failed rename restores the
+                // previous Provider1.json rather than losing the last good cache.
+                promoteStagedProvider(stagedPath, providerPath)
                 result.put("success", true)
                 result.put("nodeCount", count)
             } catch (e: Exception) {
@@ -317,8 +319,9 @@ object CFDataSingBoxCore {
     private fun ensureServerLocked() {
         if (commandServer != null) return
         DefaultNetworkMonitor.start()
-        platform = CFDataPlatformInterface()
-        val server = CommandServer(handler, platform)
+        val cfPlatform = CFDataPlatformInterface()
+        platform = cfPlatform
+        val server = CommandServer(handler, cfPlatform)
         server.start()
         commandServer = server
     }
@@ -538,6 +541,68 @@ object CFDataSingBoxCore {
         }.toString(2)
     }
 
+    private fun stageProviderConfig(configText: String): String {
+        val root = JSONObject(configText)
+        val providers = root.optJSONArray("providers")
+            ?: throw IllegalArgumentException("Provider Core 配置缺少 providers")
+        if (providers.length() == 0) {
+            throw IllegalArgumentException("Provider Core 配置没有 provider")
+        }
+        val provider = providers.optJSONObject(0)
+            ?: throw IllegalArgumentException("Provider Core 配置的 provider 无效")
+        val path = provider.optString("path").trim()
+        if (path.isBlank()) {
+            throw IllegalArgumentException("Provider Core 配置缺少 provider path")
+        }
+        provider.put("path", path + ".next")
+        return root.toString(2)
+    }
+
+    private fun deleteStagedProvider(path: String) {
+        if (path.isBlank()) return
+        val file = File(path)
+        if (file.exists() && !file.delete()) {
+            throw IllegalStateException("无法删除上一次 Provider 暂存文件：${file.absolutePath}")
+        }
+    }
+
+    private fun promoteStagedProvider(stagedPath: String, providerPath: String) {
+        val staged = File(stagedPath)
+        val target = File(providerPath)
+        if (!staged.isFile) {
+            throw IllegalStateException("暂存 Provider 文件不存在：$stagedPath")
+        }
+        val parent = target.parentFile
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw IllegalStateException("无法创建 Provider 目录：${parent.absolutePath}")
+        }
+
+        val backup = File(target.parentFile ?: File("."), target.name + ".bak")
+        if (backup.exists() && !backup.delete()) {
+            throw IllegalStateException("无法清理 Provider 备份：${backup.absolutePath}")
+        }
+
+        var movedOld = false
+        if (target.exists()) {
+            if (!target.renameTo(backup)) {
+                throw IllegalStateException("无法保护上一份 Provider1.json，已停止替换")
+            }
+            movedOld = true
+        }
+
+        if (!staged.renameTo(target)) {
+            if (movedOld && !backup.renameTo(target)) {
+                throw IllegalStateException(
+                    "无法将新 Provider1.json 替换到正式路径，且旧缓存恢复失败；备份仍保留：${backup.absolutePath}",
+                )
+            }
+            throw IllegalStateException("无法将新 Provider1.json 替换到正式路径")
+        }
+        if (movedOld && backup.exists() && !backup.delete()) {
+            throw IllegalStateException("新 Provider1.json 已替换成功，但旧备份无法删除：${backup.absolutePath}")
+        }
+    }
+
     private fun waitForProviderNodes(path: String, timeoutSeconds: Int): Int {
         if (path.isBlank()) throw IllegalArgumentException("Provider 路径为空")
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds.toLong())
@@ -558,24 +623,8 @@ object CFDataSingBoxCore {
             }
             Thread.sleep(100)
         }
-        if (!lastError.isNullOrBlank()) android.util.Log.w("CFDataSingBox", lastError!!)
+        if (!lastError.isNullOrBlank()) android.util.Log.w("CFDataSingBox", lastError)
         return 0
-    }
-
-    private fun clearProviderExcludes(configText: String): String? = try {
-        val root = JSONObject(configText)
-        val providers = root.optJSONArray("providers") ?: return null
-        var changed = false
-        for (index in 0 until providers.length()) {
-            val provider = providers.optJSONObject(index) ?: continue
-            if (provider.has("exclude") && provider.optString("exclude") != "") {
-                provider.put("exclude", "")
-                changed = true
-            }
-        }
-        if (changed) root.toString(2) else configText
-    } catch (_: Exception) {
-        null
     }
 
     private fun stripProviderInfoHeader(raw: String): String {
