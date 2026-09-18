@@ -9,6 +9,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -21,6 +24,8 @@ import java.util.concurrent.TimeUnit
 object CFDataSingBoxCore {
     private const val DEFAULT_REPEAT = 3
     private const val DEFAULT_LATENCY_TIMEOUT_SECONDS = 3
+    private const val DEFAULT_LATENCY_CONCURRENCY = 16
+    private const val MAX_LATENCY_CONCURRENCY = 64
     private const val DEFAULT_SPEED_DURATION_SECONDS = 6
     private const val DEFAULT_DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=99999999"
     private const val TRACE_URL = "https://speed.cloudflare.com/cdn-cgi/trace"
@@ -151,14 +156,15 @@ object CFDataSingBoxCore {
 
         val repeat = request.optInt("repeat", DEFAULT_REPEAT).coerceIn(1, 10)
         val timeoutSeconds = request.optInt("timeout", DEFAULT_LATENCY_TIMEOUT_SECONDS).coerceIn(1, 60)
+        val concurrency = request.optInt("concurrency", DEFAULT_LATENCY_CONCURRENCY).coerceIn(1, MAX_LATENCY_CONCURRENCY)
         ensureTestConfig(nodes)
         val server = commandServer ?: throw IllegalStateException("Libbox Core 未启动")
 
+        val orderedResults = runLatencyBatch(server, nodes, repeat, timeoutSeconds, concurrency)
         val results = JSONArray()
         var passed = 0
-        for (index in 0 until nodes.length()) {
-            val node = nodes.optJSONObject(index) ?: continue
-            val result = testLatencyWithVariants(server, node, repeat, timeoutSeconds)
+        for (result in orderedResults) {
+            if (result == null) continue
             if (result.optBoolean("success")) passed++
             results.put(result)
         }
@@ -170,6 +176,7 @@ object CFDataSingBoxCore {
             put("mode", CORE_MODE)
             put("repeat", repeat)
             put("timeout", timeoutSeconds)
+            put("concurrency", concurrency)
         }.toString()
     }
 
@@ -211,16 +218,25 @@ object CFDataSingBoxCore {
 
         val repeat = request.optInt("repeat", DEFAULT_REPEAT).coerceIn(1, 10)
         val timeoutSeconds = request.optInt("timeout", DEFAULT_LATENCY_TIMEOUT_SECONDS).coerceIn(1, 60)
+        val concurrency = request.optInt("concurrency", DEFAULT_LATENCY_CONCURRENCY).coerceIn(1, MAX_LATENCY_CONCURRENCY)
         val durationSeconds = request.optInt("duration", DEFAULT_SPEED_DURATION_SECONDS).coerceIn(1, 120)
         val downloadUrl = request.optString("downloadUrl", DEFAULT_DOWNLOAD_URL).trim().ifBlank { DEFAULT_DOWNLOAD_URL }
         ensureTestConfig(nodes)
         val server = commandServer ?: throw IllegalStateException("Libbox Core 未启动")
 
+        val latencyResults = runLatencyBatch(server, nodes, repeat, timeoutSeconds, concurrency)
         val results = JSONArray()
         var passed = 0
         for (index in 0 until nodes.length()) {
             val node = nodes.optJSONObject(index) ?: continue
-            val latency = testLatencyWithVariants(server, node, repeat, timeoutSeconds)
+            val latency = latencyResults.getOrNull(index) ?: JSONObject().apply {
+                put("success", false)
+                put("successCount", 0)
+                put("totalAttempts", repeat)
+                put("lossRate", 100.0)
+                put("mode", CORE_MODE)
+                put("error", "延迟测试没有返回结果")
+            }
             if (!latency.optBoolean("success")) {
                 results.put(latency)
                 continue
@@ -240,7 +256,62 @@ object CFDataSingBoxCore {
             put("passed", passed)
             put("results", results)
             put("mode", CORE_MODE)
+            put("latencyConcurrency", concurrency)
         }.toString()
+    }
+
+    /**
+     * Run node latency probes in parallel with a bounded worker pool, while
+     * preserving input order in the returned list. The sing-box service is
+     * created/reloaded once before this function is entered, so workers only
+     * perform direct outbound HTTP probes and never mutate core lifecycle state.
+     */
+    private fun runLatencyBatch(
+        server: CommandServer,
+        nodes: JSONArray,
+        repeat: Int,
+        timeoutSeconds: Int,
+        concurrency: Int,
+    ): List<JSONObject?> {
+        val executor = Executors.newFixedThreadPool(concurrency)
+        val completion = ExecutorCompletionService<Pair<Int, JSONObject>>(executor)
+        var submitted = 0
+        try {
+            for (index in 0 until nodes.length()) {
+                val node = nodes.optJSONObject(index) ?: continue
+                completion.submit(Callable {
+                    val result = try {
+                        testLatencyWithVariants(server, node, repeat, timeoutSeconds)
+                    } catch (e: Exception) {
+                        baseNodeResult(node).apply {
+                            put("success", false)
+                            put("successCount", 0)
+                            put("totalAttempts", repeat)
+                            put("lossRate", 100.0)
+                            put("mode", CORE_MODE)
+                            put("variantAttempts", 0)
+                            put("error", e.message ?: e.toString())
+                        }
+                    }
+                    index to result
+                })
+                submitted++
+            }
+
+            val ordered = arrayOfNulls<JSONObject>(nodes.length())
+            repeat(submitted) {
+                val (index, result) = completion.take().get()
+                ordered[index] = result
+            }
+            return ordered.toList()
+        } finally {
+            executor.shutdownNow()
+            try {
+                executor.awaitTermination(2, TimeUnit.SECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
     }
 
     private fun ensureServerLocked() {

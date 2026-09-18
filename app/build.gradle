@@ -6,7 +6,7 @@ plugins {
 android {
     namespace "com.cfdata.web"
     compileSdk 37
-    compileSdkMinor 0
+    compileSdkMinor 1
 
     signingConfigs {
         release {

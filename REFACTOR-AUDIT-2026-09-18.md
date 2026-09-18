@@ -1,8 +1,8 @@
-# CFData-WEB v9 重构审计记录（2026-09-18）
+# CFData-WEB v9 → v10 candidate 重构审计记录（2026-09-18）
 
 ## 结论
 
-本次不是简单修 CI，而是按当前 reF1nd testing 发布链重新整理 CFData 的 Android 核心集成方式。
+本次是在已确认的 v9 基础上继续修正 CI，并吸收当前 v2rayNG Real Ping 与 reF1nd testing 实现后形成的 v10 candidate。
 
 最终边界：
 
@@ -10,7 +10,7 @@
 - reF1nd sing-box / Libbox：代理协议、TLS、DNS、detour、outbound、Provider 等实际网络连接能力。
 - Android：通过进程内 Libbox `CommandServer` / `StartedService` 风格运行，不启动 standalone ELF，不依赖 root，不通过 TUN 或本地 mixed proxy 绕行。
 
-## v9 版本确认
+## v9 基线确认
 
 当前提供的 CFData-WEB 源码目录带有 commit `03f72a2c6406d865a1485baba65d47cdb96e3f1d` 的完整文件状态；GitHub 对应提交标题为 `v9更新`，并且该提交新增了：
 
@@ -36,7 +36,7 @@
 
 当前 reF1nd 发布工作流实际使用 Go `1.26.8`、JDK 17、Android NDK r28，并从源代码构建 Libbox AAR，再交给 Android 客户端使用。
 
-## 本次 CI 失败根因
+## v9 → candidate 的 CI 失败根因
 
 原始 Android Action 在构建 Libbox 前固定运行 Go `1.25.4`，而刚拉取的 reF1nd testing 源码要求 Go >= `1.25.5`，且环境设置了 `GOTOOLCHAIN=local`，所以在真正编译前直接退出。
 
@@ -61,7 +61,7 @@ CFData 当前 APK 的实际目标是 arm64，因此自建 Libbox CI 只生成 An
 
 这不是削弱 reF1nd 核心能力，而是缩小 CFData 自己的发行产物范围。
 
-### 3. 真连接延迟
+### 3. 真连接延迟（candidate 保持 v9 测量语义）
 
 默认 3 次独立 HTTPS 请求，通过指定 sing-box outbound 直接连接：
 
@@ -116,7 +116,7 @@ Android `MainActivity` 已把 backend 工作目录与 `CFDATA_DATA_DIR` 指向 a
 
 ## CI action 基线
 
-当前 workflow 使用：
+当前 candidate workflow 使用：
 
 - `actions/checkout@v7`
 - `actions/setup-go@v7`
@@ -129,7 +129,7 @@ Android `MainActivity` 已把 backend 工作目录与 `CFDATA_DATA_DIR` 指向 a
 - Go 1.26.8
 - JDK 17
 
-## 验证范围与限制
+## Candidate 验证范围与限制
 
 已完成：
 
@@ -141,3 +141,7 @@ Android `MainActivity` 已把 backend 工作目录与 `CFDATA_DATA_DIR` 指向 a
 - Android 构建流程与 AAR 依赖方向核对
 
 当前运行环境只有 Go 1.23.2，且无外网工具链下载能力，因此无法在本地真正运行 Go 1.26.8 的 Libbox 编译或完整 Android Gradle 构建。最终的编译验证仍应由 GitHub Actions 完成；此次 CI 已将 Go 版本、source SHA、NDK、AAR 生成和安装流程统一起来。
+
+## Candidate 版本编号
+
+本候选版尚未经过新的 GitHub Actions 完整成功验证，因此压缩包命名为 `CFData-WEB-v10-candidate1-2026-09-18.zip`。后续只有完整构建成功时才使用 `v10` 作为成功归档编号。

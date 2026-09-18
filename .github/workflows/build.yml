@@ -166,6 +166,9 @@ jobs:
     runs-on: ubuntu-26.04
     needs: resolve-ref1nd-testing
     steps:
+      - name: Checkout CFData source
+        uses: actions/checkout@v7
+
       - name: Checkout reF1nd sing-box source
         uses: actions/checkout@v7
         with:
@@ -251,7 +254,7 @@ jobs:
         with:
           packages: |
             platform-tools
-            platforms;android-37.0
+            platforms;android-37.1
             build-tools;37.0.0
 
       - name: Setup Gradle

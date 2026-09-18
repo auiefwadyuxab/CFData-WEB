@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "subscription_root": "singbox_subscriptions",
   "config_template": "singbox-r-template.json",
   "provider_file": "Provider1.json",
@@ -19,7 +19,7 @@
   "core_mode": "android-sfa-style-libbox-service",
   "root_required": false,
   "provider_ingestion": "reF1nd-ProviderRemote",
-  "true_latency": "3 independent real HTTP requests through the exact sing-box outbound; sort by loss then real TTFB",
+  "true_latency": "3 independent real HTTP requests through the exact sing-box outbound; sort by loss then real TTFB; batch concurrency default 16, max 64",
   "true_speed": "continuous download through the latency-selected outbound for a fixed 6-second window",
   "legacy_tcping_httping_multiplier": false,
   "legacy_latency_multiplier": false

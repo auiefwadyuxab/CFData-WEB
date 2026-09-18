@@ -10,6 +10,8 @@
     const DEFAULT_TRACE_URL = 'https://speed.cloudflare.com/cdn-cgi/trace';
     const LATENCY_REPEAT = 3;
     const LATENCY_TIMEOUT_SECONDS = 3;
+    const LATENCY_CONCURRENCY = 16;
+    const MAX_LATENCY_CONCURRENCY = 64;
     const SPEED_DURATION_SECONDS = 6;
     const INTER_SPEED_PAUSE_MS = 1200;
 
@@ -88,10 +90,12 @@
                 <div style="display:grid;grid-template-columns:160px minmax(220px,1fr);gap:10px;align-items:center;">
                     <div style="font-size:12px;color:var(--text-secondary);">延迟测试</div>
                     <div style="font-size:12px;">3 次独立真实 HTTP 请求 · 单次超时 3 秒 · 无倍率</div>
+                    <div style="font-size:12px;color:var(--text-secondary);">延迟并发</div>
+                    <div style="font-size:12px;">默认 16 个节点并行；只影响延迟阶段，不会把下载测速并发化</div>
                     <div style="font-size:12px;color:var(--text-secondary);">排序</div>
                     <div style="font-size:12px;">成功优先 → 丢包率低 → 平均真延迟低 → 最大真延迟低</div>
                     <div style="font-size:12px;color:var(--text-secondary);">下载测速</div>
-                    <div style="font-size:12px;">延迟排序后逐节点测速 · 连续下载 6 秒 · 按真实 MB/s 比较</div>
+                    <div style="font-size:12px;">延迟阶段完成后排序 · 通过节点逐节点测速 · 连续下载 6 秒 · 按真实 MB/s 比较</div>
                     <div style="font-size:12px;color:var(--text-secondary);">测速地址</div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
                         <select id="cfSBSpeedUrlPreset" style="min-width:160px;flex:0 0 auto;">
@@ -713,18 +717,22 @@
         if (!nodes.length) return status('当前节点没有可用的 reF1nd outbound', true);
         state.running = true;
         try {
-            status(`第一阶段：${nodes.length} 个节点逐个做 ${LATENCY_REPEAT} 次真实 HTTP 延迟测试……`);
-            let completed = 0;
-            for (const node of nodes) {
-                if (!state.running) break;
-                const result = latencyTestNode(node);
-                node.lastTest = result;
-                completed++;
-                if (completed === nodes.length || completed % 5 === 0) {
-                    renderNodes(latencySortEntries(state.nodes));
-                    status(`真实延迟阶段：${completed}/${nodes.length}`);
-                }
-            }
+            status(`第一阶段：${nodes.length} 个节点并行做 ${LATENCY_REPEAT} 次真实 HTTP 延迟测试（并发 ${LATENCY_CONCURRENCY}）……`);
+            const latencyPayload = {
+                nodes: nodes.map(nodePayload),
+                repeat: LATENCY_REPEAT,
+                timeout: LATENCY_TIMEOUT_SECONDS,
+                concurrency: LATENCY_CONCURRENCY
+            };
+            const latencyBatch = bridgeCall('singBoxTrueLatencyTest', latencyPayload);
+            const batchResults = Array.isArray(latencyBatch?.results) ? latencyBatch.results : [];
+            const resultById = new Map(batchResults.map((result) => [String(result.nodeId || ''), result]));
+            nodes.forEach((node) => {
+                const result = resultById.get(String(node.id));
+                if (result) node.lastTest = result;
+            });
+            renderNodes(latencySortEntries(state.nodes));
+            status(`真实延迟阶段完成：${batchResults.length}/${nodes.length}；并发 ${Number(latencyBatch?.concurrency || LATENCY_CONCURRENCY)}`);
             state.nodes = latencySortEntries(state.nodes);
             renderNodes(state.nodes);
             const latencyPassed = state.nodes.filter((node) => node.lastTest?.success && node.lastTest?.testedOutboundTag);

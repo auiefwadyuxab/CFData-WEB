@@ -59,3 +59,4 @@ app/src/main/jniLibs/*/libcfdata.so
 
 # ReF1nd Libbox is generated in CI; never commit prebuilt AARs
 app/libs/*.aar
+ref1nd-sing-box/
