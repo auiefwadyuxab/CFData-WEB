@@ -65,6 +65,10 @@ jobs:
           test -s combined_refactor/server.go
           test -s build.gradle
           test -s app/build.gradle
+          grep -Eq 'buildConfig\s*=\s*true' app/build.gradle
+          grep -Eq 'compileSdkMinor\s*=\s*1' app/build.gradle
+          grep -Fq 'override fun sendNotification(notification: Notification)' app/src/main/java/com/cfdata/web/singbox/CFDataPlatformInterface.kt
+          grep -Fq 'override fun cancelNotification(identifier: String, typeID: Int)' app/src/main/java/com/cfdata/web/singbox/CFDataPlatformInterface.kt
           if grep -RInE 'org\.jetbrains\.kotlin\.android|kotlinOptions' build.gradle app/build.gradle; then
             echo "AGP 9 built-in Kotlin migration incomplete: old Kotlin Android plugin/options remain" >&2
             exit 1
@@ -442,10 +446,19 @@ jobs:
           import re
           from pathlib import Path
           top = Path('build.gradle').read_text(encoding='utf-8')
-          assert re.search(r'id\s+"com\.android\.application"\s+version\s+"9\.3\.1"\s+apply\s+false', top)
-          print('AGP 9.3.1 + Gradle 9.7.0 toolchain selected.')
+          module = Path('app/build.gradle').read_text(encoding='utf-8')
+          assert re.search(r'id\s+"com\.android\.application"\s+version\s+"9\.3\.1"\s+apply\s+false', top), 'AGP 9.3.1 declaration missing'
+          combined = top + "\n" + module
+          assert 'org.jetbrains.kotlin.android' not in combined, 'legacy Kotlin Android plugin remains'
+          assert 'kotlinOptions' not in combined, 'legacy kotlinOptions remains'
+          assert re.search(r'buildConfig\s*=\s*true', module), 'BuildConfig generation is not enabled'
+          assert re.search(r'compileSdkMinor\s*=\s*1', module), 'compileSdkMinor assignment is not explicit'
+          print('AGP 9 + built-in Kotlin + BuildConfig + explicit SDK DSL verified.')
           PY
           ./gradlew help --no-daemon --stacktrace --warning-mode all
+
+      - name: Compile Android Kotlin sources
+        run: ./gradlew :app:compileReleaseKotlin --no-daemon --stacktrace
 
       - name: Build release APK
         env:

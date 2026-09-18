@@ -122,8 +122,8 @@ object CFDataSingBoxCore {
                 deleteStagedProvider(stagedPath)
                 val stagedConfig = stageProviderConfig(configText)
                 runSyncAttempt(stagedConfig)
-                val count = waitForProviderNodes(stagedPath, syncTimeoutSeconds)
-                if (count <= 0) {
+                val stagedCount = waitForProviderNodes(stagedPath, syncTimeoutSeconds)
+                if (stagedCount <= 0) {
                     deleteStagedProvider(stagedPath)
                     throw IllegalStateException("Provider1.json 未生成可识别节点；已保留上一份有效缓存")
                 }
@@ -132,8 +132,20 @@ object CFDataSingBoxCore {
                 // helper keeps a temporary backup so a failed rename restores the
                 // previous Provider1.json rather than losing the last good cache.
                 promoteStagedProvider(stagedPath, providerPath)
+
+                // The staged config above is only a transactional download target.
+                // Rebind the long-lived Libbox service to the canonical Provider1.json
+                // path after promotion. This prevents the active service from keeping
+                // the *.next path forever (which would make the next sync mutate/remove
+                // the currently active cache file).
+                runSyncAttempt(configText)
+                val finalCount = waitForProviderNodes(providerPath, syncTimeoutSeconds)
+                if (finalCount <= 0) {
+                    throw IllegalStateException("Provider1.json 已替换，但重新加载正式 Provider 失败")
+                }
+
                 result.put("success", true)
-                result.put("nodeCount", count)
+                result.put("nodeCount", finalCount)
             } catch (e: Exception) {
                 val message = e.message ?: e.toString()
                 result.put("error", message)

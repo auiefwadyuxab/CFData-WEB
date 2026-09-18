@@ -18,3 +18,7 @@ UI:
 - CSS uses broadly compatible fallbacks for Android WebView.
 
 Status: candidate only; not a successful v10.
+
+- AGP 9 BuildConfig generation explicitly enabled because CFDataApplication references com.cfdata.web.BuildConfig.
+- reF1nd current Libbox PlatformInterface notification ABI implemented as intentional no-ops (sendNotification/cancelNotification).
+- compileSdk / compileSdkMinor / Java DSL assignments migrated to explicit assignment syntax.

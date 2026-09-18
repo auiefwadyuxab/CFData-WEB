@@ -11,6 +11,7 @@ import io.nekohasekai.libbox.ConnectionOwner
 import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.LocalDNSTransport
 import io.nekohasekai.libbox.NetworkInterfaceIterator
+import io.nekohasekai.libbox.Notification
 import io.nekohasekai.libbox.NetworkInterface
 import io.nekohasekai.libbox.NeighborUpdateListener
 import io.nekohasekai.libbox.PlatformInterface
@@ -92,6 +93,13 @@ class CFDataPlatformInterface : PlatformInterface {
     override fun underNetworkExtension(): Boolean = false
     override fun includeAllNetworks(): Boolean = false
     override fun clearDNSCache() {}
+
+    // reF1nd 1.15.0-alpha.6-reF1nd exposes notification callbacks in the
+    // Libbox PlatformInterface. CFData is not a notification/VPN client, so
+    // intentionally keep these hooks as no-ops while satisfying the ABI.
+    override fun sendNotification(notification: Notification) {}
+
+    override fun cancelNotification(identifier: String, typeID: Int) {}
 
     @Suppress("DEPRECATION")
     override fun readWIFIState(): WIFIState? {
