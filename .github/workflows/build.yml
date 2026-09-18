@@ -56,21 +56,27 @@ jobs:
           go-version: "1.25.4"
           cache: true
 
-      - name: Validate subscription manager integration
+      - name: Validate sing-box R subscription integration
         run: |
+          set -euo pipefail
           test -s combined_refactor/subscriptions.go
+          test -s combined_refactor/singbox.go
+          test -s combined_refactor/server.go
           test -s singbox-r-template.json
-          grep -Fq '"subscription_list":' combined_refactor/server.go
-          grep -Fq '"subscription_get":' combined_refactor/server.go
-          grep -Fq '"subscription_save":' combined_refactor/server.go
-          grep -Fq '"subscription_update":' combined_refactor/server.go
-          grep -Fq '"subscription_delete":' combined_refactor/server.go
-          grep -Fq 'id="btnSubscriptions"' combined_refactor/index.html
-          grep -Fq "case 'subscription_list':" combined_refactor/index.html
-          grep -Fq "case 'subscription_detail':" combined_refactor/index.html
-          grep -Fq "type: 'subscription_update'" combined_refactor/index.html
-          grep -Fq "type: 'subscription_delete'" combined_refactor/index.html
-          echo "Subscription manager integration checks passed."
+          grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
+          grep -Fq 'id="singboxRControls"' combined_refactor/index.html
+          grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
+          grep -Fq 'handleSingBoxDiagnosticsAPI' combined_refactor/singbox.go
+          grep -Fq 'Provider1.update.log' combined_refactor/singbox.go
+          if grep -Eq 'id="btnSubscriptions"|subscriptionControls|subscriptionUserAgent' combined_refactor/index.html; then
+            echo "旧订阅管理 UI 入口仍存在" >&2
+            exit 1
+          fi
+          if grep -Eq '"subscription_(list|get|save|update|delete)"' combined_refactor/server.go; then
+            echo "旧订阅 WebSocket 入口仍存在" >&2
+            exit 1
+          fi
+          echo "sing-box R subscription integration checks passed."
 
       - name: Create Release Assets Directory
         run: mkdir -p release_assets
@@ -180,13 +186,26 @@ jobs:
             https://curl.se/ca/cacert.pem \
             -o combined_refactor/ca-certificates.crt
 
-      - name: Validate sing-box R subscription integration
+      - name: Validate sing-box R subscription integration (Android)
         run: |
+          set -euo pipefail
           test -s combined_refactor/subscriptions.go
           test -s combined_refactor/singbox.go
-          grep -Fq 'handleSingBoxSubscriptionsAPI' combined_refactor/singbox.go
-          grep -Fq 'syncOneSingBoxSubscription' combined_refactor/singbox.go
+          test -s combined_refactor/server.go
+          test -s singbox-r-template.json
+          grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
+          grep -Fq 'id="singboxRControls"' combined_refactor/index.html
           grep -Fq 'cfdataSingBoxPanel' app/src/main/assets/singbox-ui.js
+          grep -Fq 'handleSingBoxDiagnosticsAPI' combined_refactor/singbox.go
+          grep -Fq 'Provider1.update.log' combined_refactor/singbox.go
+          if grep -Eq 'id="btnSubscriptions"|subscriptionControls|subscriptionUserAgent' combined_refactor/index.html; then
+            echo "旧订阅管理 UI 入口仍存在" >&2
+            exit 1
+          fi
+          if grep -Eq '"subscription_(list|get|save|update|delete)"' combined_refactor/server.go; then
+            echo "旧订阅 WebSocket 入口仍存在" >&2
+            exit 1
+          fi
           echo "sing-box R subscription integration checks passed for Android build."
 
       - name: Install latest reF1nd Android ARM64 binary from project-root ZIP
@@ -266,6 +285,8 @@ jobs:
           PY
           cp singbox-engine.json app/src/main/assets/singbox-engine.json
           cp singbox-r-template.json app/src/main/assets/singbox-r-template.json
+          test -s app/src/main/assets/singbox-engine.json
+          test -s app/src/main/assets/singbox-r-template.json
           ls -lh app/src/main/jniLibs/arm64-v8a/libsingbox.so app/src/main/assets/singbox-engine.json app/src/main/assets/singbox-r-template.json
 
       - name: Build Android backend

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -44,9 +43,6 @@ type subscriptionSaveRequest struct {
 	Name    string            `json:"name"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
-}
-type subscriptionUpdateRequest struct {
-	ID string `json:"id"`
 }
 type subscriptionIDRequest struct {
 	ID string `json:"id"`
@@ -291,19 +287,6 @@ func createOrUpdateSubscription(req subscriptionSaveRequest) (subscriptionSummar
 		return subscriptionSummaryOf(*item), nil
 	}
 	return subscriptionSummary{}, fmt.Errorf("订阅不存在: %s", exceptID)
-}
-func updateSubscription(ctx context.Context, id string) (subscriptionSummary, error) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return subscriptionSummary{}, fmt.Errorf("缺少订阅 ID")
-	}
-	item, err := getSubscription(id)
-	if err != nil {
-		return subscriptionSummary{}, err
-	}
-	singBoxSyncMu.Lock()
-	defer singBoxSyncMu.Unlock()
-	return syncOneSingBoxSubscription(ctx, item, true)
 }
 func deleteSubscription(id string) error {
 	id = strings.TrimSpace(id)

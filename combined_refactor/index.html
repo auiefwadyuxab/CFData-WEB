@@ -263,49 +263,9 @@
             border-color: var(--primary-hover);
         }
 
-        #subscriptionControls {
+        #singboxRControls {
             display: block;
         }
-
-        .subscription-toolbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            margin-bottom: 14px;
-            flex-wrap: wrap;
-        }
-
-        .subscription-title { font-size: 16px; font-weight: 800; }
-        .subscription-hint { color: var(--text-secondary); font-size: 12px; }
-        .subscription-form {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-            padding: 14px;
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            background: linear-gradient(135deg, var(--card-bg), var(--bg-color));
-            margin-bottom: 16px;
-        }
-        .subscription-form .full { grid-column: 1 / -1; }
-        .subscription-form label { display:block; margin-bottom:6px; font-size:12px; color:var(--text-secondary); }
-        .subscription-form input { width:100%; }
-        .subscription-form-actions { display:flex; gap:8px; justify-content:flex-end; grid-column:1/-1; flex-wrap:wrap; }
-        .subscription-table-wrap { overflow-x:auto; border:1px solid var(--border-color); border-radius:12px; }
-        .subscription-table { width:100%; border-collapse:collapse; min-width:760px; }
-        .subscription-table th, .subscription-table td { padding:10px 12px; border-bottom:1px solid var(--border-color); text-align:left; font-size:12px; vertical-align:middle; }
-        .subscription-table th { color:var(--text-secondary); background:var(--bg-color); font-weight:700; }
-        .subscription-table tr:last-child td { border-bottom:0; }
-        .subscription-url { max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-        .subscription-status { display:inline-flex; padding:3px 8px; border-radius:999px; font-weight:700; border:1px solid var(--border-color); }
-        .subscription-status.ok { color:#047857; background:rgba(16,185,129,.12); border-color:rgba(16,185,129,.28); }
-        .subscription-status.bad { color:#b91c1c; background:rgba(239,68,68,.10); border-color:rgba(239,68,68,.24); }
-        .subscription-status.idle { color:var(--text-secondary); background:rgba(148,163,184,.10); }
-        .subscription-actions { display:flex; gap:6px; flex-wrap:wrap; }
-        .subscription-empty { padding:24px; text-align:center; color:var(--text-secondary); }
-        .subscription-modal-textarea { width:100%; min-height:52vh; resize:vertical; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-color); color:var(--text-main); padding:12px; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
-        @media (max-width: 768px) { .subscription-form { grid-template-columns:1fr; } .subscription-form .full { grid-column:auto; } .subscription-form-actions { grid-column:auto; } }
 
         .section-box {
             background: var(--card-bg);
@@ -1719,7 +1679,7 @@
         <div class="mode-switch">
             <button class="mode-btn active" id="btnOfficial" onclick="switchMode('official')">☁️ 官方优选</button>
             <button class="mode-btn" id="btnNSB" onclick="switchMode('nsb')">📂 非标优选</button>
-            <button class="mode-btn" id="btnSubscriptions" onclick="switchMode('subscriptions')">📦 订阅管理</button>
+            <button class="mode-btn" id="btnSingBoxR" onclick="switchMode('singbox')">🛰️ sing-box R</button>
         </div>
 
         <div class="section-box controls">
@@ -1930,47 +1890,7 @@
                 </div>
             </div>
 
-            <div id="subscriptionControls" class="hidden">
-                <div class="subscription-toolbar">
-                    <div>
-                        <div class="subscription-title">📦 订阅管理</div>
-                        <div class="subscription-hint">第一阶段只负责保存、更新和查看原始订阅内容，不解析节点，也不启动 sing-box。</div>
-                    </div>
-                    <button class="action-btn export-btn" onclick="newSubscription()">➕ 添加订阅</button>
-                </div>
-                <div class="subscription-form" id="subscriptionForm">
-                    <div>
-                        <label for="subscriptionName">名称</label>
-                        <input id="subscriptionName" type="text" maxlength="120" placeholder="例如：主订阅">
-                    </div>
-                    <div>
-                        <label for="subscriptionURL">订阅 URL</label>
-                        <input id="subscriptionURL" type="url" placeholder="https://example.com/sub">
-                    </div>
-                    <div>
-                        <label for="subscriptionUserAgent">User-Agent</label>
-                        <input id="subscriptionUserAgent" type="text" value="v2rayNG/2.2.6" placeholder="可留空使用默认值">
-                    </div>
-                    <div>
-                        <label for="subscriptionConnection">Connection</label>
-                        <input id="subscriptionConnection" type="text" value="close" placeholder="例如：close">
-                    </div>
-                    <div>
-                        <label for="subscriptionAcceptEncoding">Accept-Encoding</label>
-                        <input id="subscriptionAcceptEncoding" type="text" value="gzip" placeholder="例如：gzip">
-                    </div>
-                    <div class="subscription-form-actions">
-                        <button class="action-btn" id="subscriptionCancelBtn" onclick="newSubscription()" style="display:none;">取消编辑</button>
-                        <button class="action-btn export-btn" onclick="saveSubscription()">💾 保存订阅</button>
-                    </div>
-                </div>
-                <div class="subscription-table-wrap">
-                    <table class="subscription-table">
-                        <thead><tr><th>名称</th><th>URL</th><th>状态</th><th>内容</th><th>更新时间</th><th>操作</th></tr></thead>
-                        <tbody id="subscriptionListBody"><tr><td colspan="6" class="subscription-empty">正在加载订阅...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
+            <div id="singboxRControls" class="hidden"></div>
 
             <button id="btnStart" class="btn" onclick="startTask()"><span id="btnStartSpinner"
                     class="hidden"></span><span id="btnStartLabel">✨ 开始扫描与测试</span></button>
@@ -2428,17 +2348,6 @@
         </div>
     </div>
 
-    <div class="modal-mask" id="subscriptionRawMask">
-        <div class="result-modal" style="max-width:1000px;width:min(96vw,1000px);">
-            <div class="modal-head">
-                <h3 id="subscriptionRawTitle">订阅原始内容</h3>
-                <button class="modal-close" onclick="closeSubscriptionRaw()">×</button>
-            </div>
-            <div style="padding:14px;">
-                <textarea id="subscriptionRawContent" class="subscription-modal-textarea" readonly></textarea>
-            </div>
-        </div>
-    </div>
 
     <div class="modal-mask" id="noticeCardMask">
         <div class="result-modal notice-modal">
@@ -2547,10 +2456,8 @@
         const modeNSB = document.getElementById('btnNSB');
         const officialControls = document.getElementById('officialControls');
         const nsbControls = document.getElementById('nsbControls');
-        const modeSubscriptions = document.getElementById('btnSubscriptions');
-        const subscriptionControls = document.getElementById('subscriptionControls');
-        let subscriptions = [];
-        let editingSubscriptionId = '';
+        const modeSingBoxR = document.getElementById('btnSingBoxR');
+        const singBoxRControls = document.getElementById('singboxRControls');
         const fileInput = document.getElementById('nsbFileInput');
         const nsbSourceUrlInput = document.getElementById('nsbSourceUrl');
 
@@ -3094,7 +3001,6 @@
                 updateStatus('已连接服务器', true);
                 log('已连接服务器');
                 initThemeFromStorage();
-                loadSubscriptions();
             };
             ws.onmessage = (event) => {
                 try {
@@ -3332,151 +3238,28 @@
             }
         }
 
-        function loadSubscriptions() {
-            wsSend({ type: 'subscription_list' });
-        }
-
-        function newSubscription() {
-            editingSubscriptionId = '';
-            const fields = ['subscriptionName', 'subscriptionURL', 'subscriptionUserAgent', 'subscriptionConnection', 'subscriptionAcceptEncoding'];
-            fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-            document.getElementById('subscriptionUserAgent').value = 'v2rayNG/2.2.6';
-            document.getElementById('subscriptionConnection').value = 'close';
-            document.getElementById('subscriptionAcceptEncoding').value = 'gzip';
-            const cancel = document.getElementById('subscriptionCancelBtn');
-            if (cancel) cancel.style.display = 'none';
-        }
-
-        function editSubscription(id) {
-            const item = subscriptions.find(x => x.id === id);
-            if (!item) return;
-            editingSubscriptionId = id;
-            document.getElementById('subscriptionName').value = item.name || '';
-            document.getElementById('subscriptionURL').value = item.url || '';
-            const headers = item.headers || {};
-            document.getElementById('subscriptionUserAgent').value = headers['User-Agent'] || headers['user-agent'] || 'v2rayNG/2.2.6';
-            document.getElementById('subscriptionConnection').value = headers['Connection'] || headers['connection'] || 'close';
-            document.getElementById('subscriptionAcceptEncoding').value = headers['Accept-Encoding'] || headers['accept-encoding'] || 'gzip';
-            document.getElementById('subscriptionCancelBtn').style.display = 'inline-flex';
-            document.getElementById('subscriptionName').focus();
-        }
-
-        function saveSubscription() {
-            const name = String(document.getElementById('subscriptionName').value || '').trim();
-            const url = String(document.getElementById('subscriptionURL').value || '').trim();
-            if (!name) { showNoticeCard('请填写订阅名称'); return; }
-            if (!url) { showNoticeCard('请填写订阅 URL'); return; }
-            const headers = {};
-            const ua = String(document.getElementById('subscriptionUserAgent').value || '').trim();
-            const connection = String(document.getElementById('subscriptionConnection').value || '').trim();
-            const acceptEncoding = String(document.getElementById('subscriptionAcceptEncoding').value || '').trim();
-            if (ua) headers['User-Agent'] = ua;
-            if (connection) headers['Connection'] = connection;
-            if (acceptEncoding) headers['Accept-Encoding'] = acceptEncoding;
-            if (!wsSend({ type: 'subscription_save', data: { id: editingSubscriptionId, name, url, headers } })) return;
-            log(`${editingSubscriptionId ? '正在保存订阅修改' : '正在保存新订阅'}: ${name}`);
-        }
-
-        function updateSubscription(id) {
-            if (!wsSend({ type: 'subscription_update', data: { id } })) return;
-            log('正在更新订阅...');
-        }
-
-        function requestDeleteSubscription(id) {
-            const item = subscriptions.find(x => x.id === id);
-            if (!item) return;
-            showConfirmCard(`确定删除订阅「${item.name || id}」？\n已缓存的原始订阅内容也会一并删除。`, () => {
-                wsSend({ type: 'subscription_delete', data: { id } });
-            }, '删除订阅');
-        }
-
-        function viewSubscription(id) {
-            wsSend({ type: 'subscription_get', data: { id } });
-        }
-
-        function renderSubscriptionList(items) {
-            subscriptions = Array.isArray(items) ? items : [];
-            const body = document.getElementById('subscriptionListBody');
-            if (!body) return;
-            if (!subscriptions.length) {
-                body.innerHTML = '<tr><td colspan="6" class="subscription-empty">还没有订阅，点击“添加订阅”开始。</td></tr>';
-                return;
-            }
-            body.innerHTML = subscriptions.map(item => {
-                const id = escapeJSString(item.id || '');
-                const name = escapeHTML(item.name || '(未命名)');
-                const url = escapeHTML(item.url || '');
-                const status = String(item.status || '未更新');
-                const cls = status === '已更新' ? 'ok' : (status === '更新失败' ? 'bad' : 'idle');
-                const err = item.error ? ` title="${escapeHTML(item.error)}"` : '';
-                const size = item.hasContent ? `${formatSubscriptionBytes(item.contentLength)}` : '无缓存';
-                const updated = formatSubscriptionTime(item.updatedAt);
-                return `<tr>
-                    <td>${name}</td>
-                    <td class="subscription-url" title="${url}">${url}</td>
-                    <td><span class="subscription-status ${cls}"${err}>${escapeHTML(status)}</span></td>
-                    <td>${escapeHTML(size)}</td>
-                    <td>${escapeHTML(updated)}</td>
-                    <td><div class="subscription-actions">
-                        <button class="action-btn" onclick="updateSubscription('${id}')">🔄 更新</button>
-                        <button class="action-btn" onclick="viewSubscription('${id}')">👁 查看</button>
-                        <button class="action-btn" onclick="editSubscription('${id}')">✏️ 编辑</button>
-                        <button class="action-btn" onclick="requestDeleteSubscription('${id}')">🗑 删除</button>
-                    </div></td>
-                </tr>`;
-            }).join('');
-        }
-
-        function formatSubscriptionBytes(n) {
-            const value = Number(n || 0);
-            if (!value) return '已缓存';
-            if (value < 1024) return `${value} B`;
-            if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-            return `${(value / 1024 / 1024).toFixed(2)} MB`;
-        }
-
-        function formatSubscriptionTime(v) {
-            if (!v) return '—';
-            const d = new Date(v);
-            return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString();
-        }
-
-        function showSubscriptionRaw(item) {
-            const mask = document.getElementById('subscriptionRawMask');
-            const title = document.getElementById('subscriptionRawTitle');
-            const content = document.getElementById('subscriptionRawContent');
-            if (!mask || !title || !content) return;
-            title.textContent = `订阅原始内容 · ${item.name || item.id || ''}`;
-            content.value = String(item.content || '');
-            mask.classList.add('active');
-        }
-
-        function closeSubscriptionRaw() {
-            const mask = document.getElementById('subscriptionRawMask');
-            if (mask) mask.classList.remove('active');
-        }
-
         function switchMode(mode) {
             currentMode = mode;
             modeOfficial.classList.toggle('active', mode === 'official');
             modeNSB.classList.toggle('active', mode === 'nsb');
-            modeSubscriptions.classList.toggle('active', mode === 'subscriptions');
+            modeSingBoxR.classList.toggle('active', mode === 'singbox');
+            if (window.__cfSBSetVisible) window.__cfSBSetVisible(mode === 'singbox');
 
-            if (mode === 'subscriptions') {
+            if (mode === 'singbox') {
                 officialControls.classList.add('hidden');
                 nsbControls.classList.add('hidden');
-                subscriptionControls.classList.remove('hidden');
+                if (singBoxRControls) singBoxRControls.classList.remove('hidden');
                 document.getElementById('btnStart').style.display = 'none';
                 document.getElementById('btnRunInBackground').style.display = 'none';
                 document.getElementById('progressBox').style.display = 'none';
                 document.getElementById('backgroundStatusCard').style.display = 'none';
                 document.querySelector('.tabs').style.display = 'none';
                 document.getElementById('dcSection').style.display = 'none';
-                loadSubscriptions();
+                log('切换至：reF1nd sing-box R');
                 return;
             }
 
-            subscriptionControls.classList.add('hidden');
+            if (singBoxRControls) singBoxRControls.classList.add('hidden');
             document.getElementById('btnStart').style.display = '';
             document.getElementById('progressBox').style.display = '';
             document.querySelector('.tabs').style.display = '';
@@ -6218,36 +6001,6 @@
                 case 'config_data':
                     applyConfigValues(mapCLIConfigToForm(msg.data));
                     log('配置文件已从服务器加载');
-                    break;
-                case 'subscription_list':
-                    renderSubscriptionList(msg.data || []);
-                    break;
-                case 'subscription_saved':
-                    editingSubscriptionId = '';
-                    newSubscription();
-                    showNoticeCard('订阅已保存', '订阅管理');
-                    break;
-                case 'subscription_update_started':
-                    renderSubscriptionList(subscriptions.map(x => x.id === msg.data?.id ? { ...x, status: '更新中' } : x));
-                    break;
-                case 'subscription_updated':
-                    showNoticeCard(`订阅“${msg.data?.name || msg.data?.id || ''}”更新成功`, '订阅更新');
-                    break;
-                case 'subscription_update_error':
-                    showNoticeCard(`订阅更新失败
-
-${msg.data?.message || '未知错误'}`, '订阅更新');
-                    break;
-                case 'subscription_deleted':
-                    showNoticeCard('订阅已删除', '订阅管理');
-                    if (editingSubscriptionId === msg.data?.id) newSubscription();
-                    break;
-                case 'subscription_detail':
-                    showSubscriptionRaw(msg.data || {});
-                    break;
-                case 'subscription_error':
-                    showNoticeCard(msg.data || '订阅操作失败', '订阅管理');
-                    log(`订阅操作失败: ${msg.data || '未知错误'}`);
                     break;
                 case 'scan_progress':
                     if (isStoppingTask) break;
