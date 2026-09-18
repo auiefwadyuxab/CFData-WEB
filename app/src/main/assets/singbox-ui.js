@@ -225,24 +225,75 @@
         }).join('') : '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-secondary);">还没有订阅，请先添加一个 URL。</td></tr>';
     }
 
+    function bridgeCall(method, payload) {
+        if (!window.CFDataAndroid || typeof window.CFDataAndroid[method] !== 'function') {
+            throw new Error('当前页面没有 Android Libbox Bridge；请在 CFData-WEB Android APK 中使用 sing-box R');
+        }
+        const raw = window.CFDataAndroid[method](JSON.stringify(payload || {}));
+        let data;
+        try { data = raw ? JSON.parse(raw) : {}; } catch (_) { throw new Error('Android Libbox 返回了无效数据'); }
+        if (!data.success && data.error) throw new Error(data.error);
+        return data;
+    }
+
+    async function notifySyncState(item, result) {
+        try {
+            await api('/api/subscription/singbox/sync-state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: item.id,
+                    success: !!result.success,
+                    nodeCount: Number(result.nodeCount || 0),
+                    error: result.error || '',
+                }),
+            });
+        } catch (_) {}
+    }
+
+    async function syncCore(ids) {
+        const configsData = await api('/api/subscription/singbox/configs');
+        const wanted = Array.isArray(ids) && ids.length ? new Set(ids) : null;
+        const configs = (configsData.configs || []).filter((entry) => entry.success && (!wanted || wanted.has(entry.id)));
+        if (!configs.length) throw new Error('没有可交给 Android Libbox Core 同步的订阅配置');
+        const result = bridgeCall('singBoxSyncProviders', {
+            configs,
+            timeoutSeconds: 90,
+        });
+        const results = Array.isArray(result.results) ? result.results : [];
+        for (const item of results) {
+            const sub = state.subscriptions.find((entry) => entry.id === item.id);
+            if (sub) await notifySyncState(sub, item);
+        }
+        if (Array.isArray(result.errors) && result.errors.length) {
+            throw new Error(result.errors.join('；'));
+        }
+        return result;
+    }
+
     async function save(sync) {
         const name = document.getElementById('cfSBName')?.value.trim() || '';
         const url = document.getElementById('cfSBUrl')?.value.trim() || '';
         if (!name || !url) return status('订阅名称和 URL 不能为空', true);
         try {
-            status(sync ? '正在保存并通过 reF1nd Provider1 更新……' : '正在保存……');
+            status(sync ? '正在保存订阅并交给 Android Libbox Core 更新……' : '正在保存……');
             const data = await api('/api/subscription/singbox/save', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: state.editId, name, url, headers: {}, sync }),
+                body: JSON.stringify({ id: state.editId, name, url, headers: {}, sync: false }),
             });
-            if (data.syncError) {
-                status(`已保存，但 Provider1 同步失败：${data.syncError}`, true);
-            } else {
-                const count = Number(data.subscription?.nodeCount || 0);
-                status(`保存成功${sync ? '，Provider1 已更新' : ''}${sync ? `；节点 ${count}` : ''}`, false);
-            }
+            const savedId = data.subscription?.id || state.editId;
             cancel();
+            await loadSubs();
+            if (sync && savedId) {
+                const coreResult = await syncCore([savedId]);
+                const item = state.subscriptions.find((entry) => entry.id === savedId);
+                const synced = (coreResult.results || []).find((entry) => entry.id === savedId);
+                if (item && synced) await notifySyncState(item, synced);
+                status(`保存成功，Libbox Provider1 已更新；节点 ${Number(synced?.nodeCount || 0)}`, false);
+            } else {
+                status('保存成功，等待 Android Libbox Core 同步', false);
+            }
             await loadSubs();
             await refreshNodes(false);
         } catch (error) {
@@ -276,14 +327,15 @@
 
     async function syncOne(id) {
         try {
-            status('正在用 reF1nd sing-box R Provider1 更新订阅……');
-            const data = await api('/api/subscription/singbox/update', {
+            status('正在准备订阅并交给 Android Libbox Provider1 更新……');
+            await api('/api/subscription/singbox/update', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id, force: true }),
+                body: JSON.stringify({ id }),
             });
-            const count = Number(data.subscription?.nodeCount || 0);
-            status(`更新成功，Provider1 节点 ${count}`, false);
+            const result = await syncCore([id]);
+            const synced = (result.results || []).find((entry) => entry.id === id);
+            status(`Libbox Provider1 更新${synced?.success ? '成功' : '失败'}：节点 ${Number(synced?.nodeCount || 0)}`, !synced?.success);
             await loadSubs();
             await refreshNodes(false);
         } catch (error) {
@@ -293,16 +345,15 @@
 
     async function syncAll() {
         try {
-            status('正在强制更新全部 sing-box R Provider1……');
-            const data = await api('/api/subscription/singbox/sync-all?force=true', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}',
-            });
-            if (Array.isArray(data.errors) && data.errors.length) {
-                status(`同步完成，但有 ${data.errors.length} 个失败；节点 ${Number(data.nodes || 0)}。首个错误：${data.errors[0]}`, true);
+            status('正在把全部订阅交给 Android Libbox Provider1 更新……');
+            const subs = await api('/api/subscription/singbox/subscriptions');
+            state.subscriptions = Array.isArray(subs.subscriptions) ? subs.subscriptions : [];
+            const result = await syncCore(state.subscriptions.map((entry) => entry.id));
+            const errors = Array.isArray(result.errors) ? result.errors : [];
+            if (errors.length) {
+                status(`Libbox 更新完成，但有 ${errors.length} 个失败：${errors[0]}`, true);
             } else {
-                status(`同步完成：更新 ${Number(data.updated || 0)}，缓存 ${Number(data.cached || 0)}，节点 ${Number(data.nodes || 0)}`, false);
+                status(`Libbox 更新完成：${(result.results || []).filter((entry) => entry.success).length} 个订阅成功`, false);
             }
             await loadSubs();
             await refreshNodes(false);
@@ -389,15 +440,30 @@
 
     async function testNode(id) {
         try {
-            const data = await api('/api/subscription/singbox/test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nodeId: id, repeat: 3, timeout: 8 }),
-            });
             const node = state.nodes.find((entry) => entry.id === id);
-            if (node) node.lastTest = data;
+            if (!node || !node.outbound) throw new Error('节点缺少 reF1nd outbound 配置，请重新同步 Provider1');
+            status(`${node.name || id}：正在通过 Libbox 指定 outbound 真连接测试……`);
+            const data = bridgeCall('singBoxTrueTest', {
+                nodes: [{
+                    id: node.id,
+                    name: node.name,
+                    protocol: node.protocol,
+                    server: node.server,
+                    port: node.port,
+                    outboundTag: node.outboundTag,
+                    outbound: node.outbound,
+                    variants: Array.isArray(node.variants) ? node.variants : [],
+                }],
+                repeat: 3,
+                timeout: 8,
+                downloadBytes: 10 * 1024 * 1024,
+                downloadUrl: 'https://speed.cloudflare.com/__down?bytes=99999999',
+            });
+            const result = data.results?.[0] || data;
+            const target = state.nodes.find((entry) => entry.id === id);
+            if (target) target.lastTest = result;
             renderNodes(state.nodes);
-            status(`${data.node || id}：${resultText(data)}`, !data.success);
+            status(`${result.node || id}：${resultText(result)}`, !result.success);
         } catch (error) {
             status(`真连接测试失败：${error.message}`, true);
         }
@@ -405,17 +471,25 @@
 
     async function batch() {
         if (!state.nodes.length) return status('没有节点可测试', true);
+        const nodes = state.nodes.filter((node) => node.outbound).map((node) => ({
+            id: node.id, name: node.name, protocol: node.protocol, server: node.server, port: node.port,
+            outboundTag: node.outboundTag, outbound: node.outbound,
+            variants: Array.isArray(node.variants) ? node.variants : [],
+        }));
+        if (!nodes.length) return status('当前节点没有可用的 reF1nd outbound', true);
         try {
-            status(`开始测试 ${state.nodes.length} 个节点；按节点顺序执行，保持低干扰……`);
-            const data = await api('/api/subscription/singbox/test-batch', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nodeIds: state.nodes.map((node) => node.id), repeat: 3, timeout: 8 }),
+            status(`开始测试 ${nodes.length} 个节点；Libbox Core 只启动/重载一次，随后直接调用各节点的 sing-box outbound……`);
+            const data = bridgeCall('singBoxTrueTest', {
+                nodes,
+                repeat: 3,
+                timeout: 8,
+                downloadBytes: 10 * 1024 * 1024,
+                downloadUrl: 'https://speed.cloudflare.com/__down?bytes=99999999',
             });
             const byID = new Map((data.results || []).map((result) => [result.nodeId, result]));
             state.nodes.forEach((node) => { if (byID.has(node.id)) node.lastTest = byID.get(node.id); });
             renderNodes(state.nodes);
-            status(`批量测试完成：${Number(data.passed || 0)}/${Number(data.total || state.nodes.length)} 节点成功。`, !(data.passed || 0));
+            status(`批量真连接测试完成：${Number(data.passed || 0)}/${Number(data.total || nodes.length)} 节点成功。`, !(data.passed || 0));
         } catch (error) {
             status(`批量测试失败：${error.message}`, true);
         }

@@ -25,6 +25,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+
+import com.cfdata.web.singbox.CFDataSingBoxCore;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -44,7 +46,6 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int PORT = 13335;
     private static final String BACKEND_LIBRARY = "libcfdata.so";
-    private static final String SINGBOX_NATIVE_LIBRARY = "libsingbox.so";
     private static final String SINGBOX_CONFIG_ASSET = "singbox-engine.json";
     private static final String SINGBOX_TEMPLATE_ASSET = "singbox-r-template.json";
     private static final String SINGBOX_UI_ASSET = "singbox-ui.js";
@@ -223,8 +224,7 @@ public class MainActivity extends Activity {
             try {
                 setLoadingMessage("正在准备本地服务...");
                 File backend = prepareBackendBinary();
-                setLoadingMessage("正在准备 sing-box 核心...");
-                File singBox = prepareSingBoxBinary();
+                setLoadingMessage("正在准备 sing-box R 数据目录...");
                 prepareSingBoxConfig();
                 prepareSingBoxTemplate();
                 ProcessBuilder builder = new ProcessBuilder(
@@ -238,7 +238,6 @@ public class MainActivity extends Activity {
                 // Android, which is read-only. Explicitly provide Go with the
                 // app-private writable directory used for subscriptions.json.
                 builder.environment().put("CFDATA_DATA_DIR", appDataDir.getAbsolutePath());
-                builder.environment().put("CFDATA_SINGBOX_PATH", singBox.getAbsolutePath());
                 builder.environment().put("CFDATA_APP_UID", String.valueOf(android.os.Process.myUid()));
                 builder.redirectErrorStream(true);
                 backendProcess = builder.start();
@@ -297,9 +296,16 @@ public class MainActivity extends Activity {
 
     private void prepareSingBoxConfig() throws IOException {
         File target = new File(getFilesDir(), "singbox-engine.json");
+        boolean current = false;
         if (target.isFile() && target.length() > 0) {
-            return;
+            try (java.io.InputStream in = new java.io.FileInputStream(target)) {
+                byte[] buffer = new byte[(int) Math.min(target.length(), 128 * 1024L)];
+                int read = in.read(buffer);
+                String text = read > 0 ? new String(buffer, 0, read, StandardCharsets.UTF_8) : "";
+                current = text.contains("\"version\": 8");
+            }
         }
+        if (current) return;
         try (java.io.InputStream in = getAssets().open(SINGBOX_CONFIG_ASSET);
              java.io.FileOutputStream out = new java.io.FileOutputStream(target, false)) {
             byte[] buffer = new byte[16 * 1024];
@@ -315,9 +321,6 @@ public class MainActivity extends Activity {
 
     private void prepareSingBoxTemplate() throws IOException {
         File target = new File(getFilesDir(), SINGBOX_TEMPLATE_ASSET);
-        if (target.isFile() && target.length() > 0) {
-            return;
-        }
         try (java.io.InputStream in = getAssets().open(SINGBOX_TEMPLATE_ASSET);
              java.io.FileOutputStream out = new java.io.FileOutputStream(target, false)) {
             byte[] buffer = new byte[16 * 1024];
@@ -329,24 +332,6 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             throw new IOException("未找到内置 sing-box R 模板配置资源: " + SINGBOX_TEMPLATE_ASSET, e);
         }
-    }
-
-    private File prepareSingBoxBinary() throws IOException {
-        // Android 10+ deliberately prevents applications targeting API 29+ from
-        // executing newly-created binaries from their writable app home. The
-        // reF1nd sing-box core is therefore packaged as a native-library payload
-        // in jniLibs and resolved from ApplicationInfo.nativeLibraryDir.
-        File target = new File(getApplicationInfo().nativeLibraryDir, SINGBOX_NATIVE_LIBRARY);
-        if (!target.isFile()) {
-            throw new IOException("未找到内置 reF1nd sing-box 核心: " + target.getAbsolutePath());
-        }
-        if (!target.canExecute()) {
-            // Native libraries are extracted with execute permission by Android.
-            // Do not copy the file to filesDir: that location is intentionally
-            // non-executable on modern Android.
-            throw new IOException("内置 reF1nd sing-box 核心不可执行: " + target.getAbsolutePath());
-        }
-        return target;
     }
 
     private void waitForBackend() throws InterruptedException {
@@ -459,6 +444,37 @@ public class MainActivity extends Activity {
                 startActivityForResult(intent, REQUEST_CREATE_DOCUMENT);
             });
         }
+
+        @JavascriptInterface
+        public String singBoxSyncProviders(String payload) {
+            try {
+                return CFDataSingBoxCore.syncProviders(payload == null ? "{}" : payload);
+            } catch (Exception e) {
+                org.json.JSONObject result = new org.json.JSONObject();
+                try {
+                    result.put("success", false);
+                    result.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
+                } catch (Exception ignored) {
+                }
+                return result.toString();
+            }
+        }
+
+        @JavascriptInterface
+        public String singBoxTrueTest(String payload) {
+            try {
+                return CFDataSingBoxCore.trueTest(payload == null ? "{}" : payload);
+            } catch (Exception e) {
+                org.json.JSONObject result = new org.json.JSONObject();
+                try {
+                    result.put("success", false);
+                    result.put("error", e.getMessage() == null ? e.toString() : e.getMessage());
+                    result.put("mode", "libbox-in-process-direct-outbound");
+                } catch (Exception ignored) {
+                }
+                return result.toString();
+            }
+        }
     }
 
     private String sanitizeFileName(String fileName) {
@@ -509,6 +525,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        CFDataSingBoxCore.stop();
         if (backendProcess != null) {
             backendProcess.destroy();
         }

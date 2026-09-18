@@ -76,6 +76,8 @@ jobs:
             echo "旧订阅 WebSocket 入口仍存在" >&2
             exit 1
           fi
+          test -s third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          test -s third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
           echo "sing-box R subscription integration checks passed."
 
       - name: Create Release Assets Directory
@@ -168,8 +170,6 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
 
       - name: Set Version
         id: set-version
@@ -206,76 +206,49 @@ jobs:
             echo "旧订阅 WebSocket 入口仍存在" >&2
             exit 1
           fi
+          test -s third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go
+          test -s third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go
+          if grep -RInE 'su -c|findSuBinary|libsingbox|CFDATA_SINGBOX_PATH' app/src/main/java/com/cfdata/web/singbox app/src/main/java/com/cfdata/web/MainActivity.java; then
+            echo "Android Libbox 真连接路径仍包含旧 standalone/root 启动逻辑" >&2
+            exit 1
+          fi
           echo "sing-box R subscription integration checks passed for Android build."
 
-      - name: Install latest reF1nd Android ARM64 binary from project-root ZIP
+      - name: Install Android SDK and NDK for reF1nd Libbox build
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-37" \
+            "build-tools;35.0.0" \
+            "ndk;28.0.13004108"
 
-          # The project convention is a single root-level archive named sing-box.zip.
-          # Do not execute the Android ARM64 binary on the x86_64 GitHub runner.
-          archive="sing-box.zip"
-          if [ ! -f "$archive" ]; then
-            archives=(singboxr*.zip sing-boxr*.zip singbox*.zip sing-box*.zip)
-            if [ "${#archives[@]}" -eq 0 ]; then
-              echo "未找到 sing-box.zip。请把最新 reF1nd Android ARM64 核心 ZIP 放在项目根目录，并命名为 sing-box.zip。" >&2
-              exit 1
-            fi
-            archive="$(printf '%s\n' "${archives[@]}" | xargs -r ls -1t | head -n 1)"
-          fi
-          [ -f "$archive" ] || { echo "无法选择 sing-box 核心 ZIP。" >&2; exit 1; }
-          echo "Using sing-box archive: ${archive}"
+      - name: Build reF1nd Libbox Android AAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/ref1nd-sing-box"
+          git clone --depth 1 --branch reF1nd-testing https://github.com/reF1nd/sing-box.git "$RUNNER_TEMP/ref1nd-sing-box"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          cd "$RUNNER_TEMP/ref1nd-sing-box"
+          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/daemon/cfdata_true_test.go" daemon/cfdata_true_test.go
+          cp "$GITHUB_WORKSPACE/third_party/ref1nd-libbox-overrides/experimental/libbox/cfdata.go" experimental/libbox/cfdata.go
+          go run ./cmd/internal/build_libbox -target android -platform android/arm64
+          test -s libbox.aar
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp libbox.aar "$GITHUB_WORKSPACE/app/libs/libbox.aar"
+          ls -lh "$GITHUB_WORKSPACE/app/libs/libbox.aar"
 
-          extract_dir="$RUNNER_TEMP/cfdata-singboxr"
-          rm -rf "$extract_dir"
-          mkdir -p "$extract_dir"
-          unzip -q "$archive" -d "$extract_dir"
-
-          candidate=""
-          # Prefer the expected file name, then fall back to any ARM64 ELF.
-          expected="$extract_dir/sing-box"
-          if [ -f "$expected" ] && file "$expected" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'; then
-            candidate="$expected"
-          else
-            while IFS= read -r -d '' file_path; do
-              if file "$file_path" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'; then
-                candidate="$file_path"
-                break
-              fi
-            done < <(find "$extract_dir" -type f -print0)
-          fi
-
-          if [ -z "$candidate" ]; then
-            echo "ZIP 中没有检测到 Android ARM64 ELF 二进制。" >&2
-            find "$extract_dir" -maxdepth 4 -type f -print >&2 || true
-            exit 1
-          fi
-
-          chmod +x "$candidate"
-          echo "Selected binary: $candidate"
-          file "$candidate"
-          file "$candidate" | grep -Eq 'ELF 64-bit.*(ARM aarch64|AArch64|LSB.*aarch64)'
-
-          # Android 10+ blocks execve() from the writable app home. Package the
-          # standalone ARM64 ELF beside libcfdata.so under jniLibs instead.
-          # Android extracts native-library payloads into nativeLibraryDir with
-          # executable permissions, which is the location MainActivity uses.
-          rm -f app/src/main/assets/sing-box-android-arm64 app/src/main/assets/sing-box-android-arm64.version
-          mkdir -p app/src/main/jniLibs/arm64-v8a
-          cp "$candidate" app/src/main/jniLibs/arm64-v8a/libsingbox.so
-          chmod 755 app/src/main/jniLibs/arm64-v8a/libsingbox.so
-          test -x app/src/main/jniLibs/arm64-v8a/libsingbox.so
-
-          archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
-          binary_sha256="$(sha256sum "$candidate" | awk '{print $1}')"
-          echo "Archive SHA256: ${archive_sha256}"
-          echo "Binary SHA256: ${binary_sha256}"
-          echo "Bundled Android ARM64 sing-box core as native-library payload (never executed on x86_64 runner)."
-
-          test -s singbox-engine.json
-          test -s singbox-r-template.json
+      - name: Copy CFData sing-box runtime assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp singbox-engine.json app/src/main/assets/singbox-engine.json
+          cp singbox-r-template.json app/src/main/assets/singbox-r-template.json
+          test -s app/src/main/assets/singbox-engine.json
+          test -s app/src/main/assets/singbox-r-template.json
           python3 - <<'PY'
           import json
           for path in ("singbox-engine.json", "singbox-r-template.json"):
@@ -283,11 +256,6 @@ jobs:
                   json.load(f)
               print("JSON OK:", path)
           PY
-          cp singbox-engine.json app/src/main/assets/singbox-engine.json
-          cp singbox-r-template.json app/src/main/assets/singbox-r-template.json
-          test -s app/src/main/assets/singbox-engine.json
-          test -s app/src/main/assets/singbox-r-template.json
-          ls -lh app/src/main/jniLibs/arm64-v8a/libsingbox.so app/src/main/assets/singbox-engine.json app/src/main/assets/singbox-r-template.json
 
       - name: Build Android backend
         working-directory: combined_refactor
@@ -350,13 +318,15 @@ jobs:
       - name: Build release APK
         env:
           ANDROID_VERSION_NAME: ${{ steps.set-version.outputs.VERSION }}
-        run: gradle assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Verify APK Contains Backend
         run: |
           unzip -l app/build/outputs/apk/release/app-release.apk | tee apk-contents.txt
           grep -q "lib/arm64-v8a/libcfdata.so" apk-contents.txt
           unzip -l app/build/outputs/apk/release/app-release.apk "lib/arm64-v8a/libcfdata.so"
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep -q "lib/arm64-v8a/libbox.so"
+          unzip -l app/build/outputs/apk/release/app-release.apk | grep -q "lib/arm64-v8a/libbox"
 
       - name: Prepare APK Asset
         run: |

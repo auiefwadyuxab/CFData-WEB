@@ -1,31 +1,21 @@
 {
-  "version": 7,
+  "version": 8,
   "subscription_root": "singbox_subscriptions",
   "config_template": "singbox-r-template.json",
   "provider_file": "Provider1.json",
   "provider_update_interval": "24h",
   "provider_exclude": "节点|剩余|套餐|客服|官网",
   "provider_health_check": {
-    "enabled": true,
-    "url": "http://cp.cloudflare.com/generate_204",
-    "interval": "30m",
-    "timeout": "3s"
+    "enabled": false
   },
-  "startup_sync": true,
+  "startup_sync": false,
   "sync_timeout_seconds": 90,
   "test_repeat": 3,
   "test_timeout_seconds": 8,
   "download_test_bytes": 10485760,
   "download_test_url": "https://speed.cloudflare.com/__down?bytes=99999999",
-  "test_transport": "mixed",
-  "prefer_sing_tun": false,
-  "sing_tun_requires_root": true,
-  "mixed_fallback": true,
-  "local_proxy_host": "127.0.0.1",
-  "controller_host": "127.0.0.1",
-  "provider_runtime_path_mode": "relative",
-  "provider_success_requires_nodes": true,
-  "provider_keep_last_log": true,
-  "provider_download_detour": "direct",
-  "provider_retry_without_exclude": true
+  "core_mode": "android-libbox-in-process",
+  "root_required": false,
+  "provider_ingestion": "reF1nd-ProviderRemote",
+  "true_test": "CFData trace/download through direct sing-box outbound"
 }
