@@ -45,7 +45,9 @@
         running: false,
         speedURL: '',
         latencyConcurrency: DEFAULT_LATENCY_CONCURRENCY,
-        phase: 'idle'
+        phase: 'idle',
+        nodeFilter: '',
+        nodeResultFilter: 'all'
     };
 
     function panelHTML() {
@@ -129,6 +131,21 @@
             }
             #cfdataSingBoxPanel table tbody tr:hover { background:var(--bg-color); }
             #cfdataSingBoxPanel .cf-sb-best { font-weight:800; }
+            #cfdataSingBoxPanel .cf-sb-progress {
+                height:4px;overflow:hidden;border-radius:999px;background:rgba(127,127,127,.14);margin-top:8px;
+            }
+            #cfdataSingBoxPanel .cf-sb-progress > span {
+                display:block;height:100%;width:0%;background:currentColor;border-radius:inherit;transition:width .2s ease;
+            }
+            #cfdataSingBoxPanel .cf-sb-progress.indeterminate > span {
+                width:35%;animation:cfSbProgress 1.1s ease-in-out infinite;
+            }
+            @keyframes cfSbProgress { 0%{transform:translateX(-120%)} 100%{transform:translateX(320%)} }
+            #cfdataSingBoxPanel .cf-sb-filter-row {
+                display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;
+            }
+            #cfdataSingBoxPanel .cf-sb-filter-row input { flex:1;min-width:180px; }
+            #cfdataSingBoxPanel .cf-sb-count-note { color:var(--text-secondary);font-size:11px; }
             @media (max-width: 900px) {
                 #cfdataSingBoxPanel .cf-sb-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
             }
@@ -136,6 +153,10 @@
                 #cfdataSingBoxPanel .cf-sb-grid { grid-template-columns:1fr 1fr;gap:8px; }
                 #cfdataSingBoxPanel .cf-sb-card { min-height:68px;padding:10px; }
                 #cfdataSingBoxPanel .cf-sb-value { font-size:18px; }
+                #cfdataSingBoxPanel .cf-sb-filter-row { align-items:stretch; }
+                #cfdataSingBoxPanel .cf-sb-filter-row input,
+                #cfdataSingBoxPanel .cf-sb-filter-row select,
+                #cfdataSingBoxPanel .cf-sb-filter-row button { min-height:40px; }
             }
         </style>
         <div id="cfdataSingBoxPanel" class="section-box" style="margin-top:0;">
@@ -215,9 +236,12 @@
                 </div>
             </div>
 
-            <div id="cfSBStatus" class="cf-sb-section cf-sb-status" style="color:var(--text-secondary);font-size:12px;line-height:1.6;">
-                <span class="cf-sb-dot" aria-hidden="true"></span>
-                正在加载 sing-box R 订阅状态……
+            <div id="cfSBStatus" class="cf-sb-section cf-sb-status" style="color:var(--text-secondary);font-size:12px;line-height:1.6;display:block;">
+                <div style="display:flex;align-items:center;gap:10px;min-height:24px;">
+                    <span class="cf-sb-dot" aria-hidden="true"></span>
+                    <span class="cf-sb-status-text">正在加载 sing-box R 订阅状态……</span>
+                </div>
+                <div id="cfSBProgress" class="cf-sb-progress" aria-hidden="true"><span></span></div>
             </div>
 
             <div class="cf-sb-table-wrap" style="margin-top:12px;">
@@ -231,7 +255,17 @@
 
             <div style="margin-top:16px;display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;padding:0 2px;">
                 <div style="font-weight:700;">Provider1 节点 <span id="cfSBNodeCount" class="badge">0</span></div>
-                <div style="font-size:12px;color:var(--text-secondary);">同 server:port 自动合并，多订阅来源保留；测试沿用每个节点实际 outbound</div>
+                <div id="cfSBNodeVisibleCount" class="cf-sb-count-note">显示 0 / 0</div>
+            </div>
+            <div class="cf-sb-filter-row">
+                <input id="cfSBNodeFilter" type="search" placeholder="🔎 搜索节点、地址、协议或来源" autocomplete="off">
+                <select id="cfSBNodeResultFilter" style="min-width:130px;">
+                    <option value="all">全部结果</option>
+                    <option value="passed">仅通过</option>
+                    <option value="failed">仅失败</option>
+                    <option value="untested">未测试</option>
+                </select>
+                <button class="action-btn" id="cfSBNodeFilterReset" type="button">重置</button>
             </div>
             <div class="cf-sb-table-wrap" style="margin-top:10px;">
                 <table id="cfSBNodeTable" style="width:100%;min-width:1120px;border-collapse:collapse;">
@@ -329,9 +363,9 @@
     }
 
     function status(text, bad) {
+        const value = String(text || '');
         const element = document.getElementById('cfSBStatus');
         if (element) {
-            const value = String(text || '');
             const color = bad ? 'var(--error-color)' : /完成|成功|通过/.test(value) ? 'var(--success-color)' : /失败|错误/.test(value) ? 'var(--error-color)' : 'var(--text-secondary)';
             element.style.color = color;
             element.title = value;
@@ -341,11 +375,27 @@
             if (!label) {
                 label = document.createElement('span');
                 label.className = 'cf-sb-status-text';
-                element.appendChild(label);
+                element.querySelector('div')?.appendChild(label);
             }
             label.textContent = value;
         }
-        if (bad || /^(正在|同步|更新|保存|删除|测试|开始|完成|已|节点)/.test(String(text || ''))) appendMainLog((bad ? '❌ ' : 'ℹ️ ') + String(text || ''));
+        if (bad || /^(正在|同步|更新|保存|删除|测试|开始|完成|已|节点)/.test(value)) appendMainLog((bad ? '❌ ' : 'ℹ️ ') + value);
+    }
+
+    function setProgress(percent, indeterminate) {
+        const bar = document.getElementById('cfSBProgress');
+        const fill = bar?.querySelector('span');
+        if (!bar || !fill) return;
+        if (indeterminate) {
+            bar.classList.add('indeterminate');
+            bar.style.color = 'var(--text-secondary)';
+            fill.style.width = '35%';
+        } else {
+            bar.classList.remove('indeterminate');
+            const value = Math.max(0, Math.min(100, Number(percent) || 0));
+            bar.style.color = value >= 100 ? 'var(--success-color)' : 'var(--text-secondary)';
+            fill.style.width = `${value}%`;
+        }
     }
 
     function setPhase(phase) {
@@ -381,14 +431,12 @@
         return `<span style="color:${color};font-weight:700;">${esc(stateText)}</span>${count ? ` · ${count} 节点` : ''}`;
     }
 
-    async function loadSubs() {
-        const data = await api('/api/subscription/singbox/subscriptions');
-        state.subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
-        updateMetrics();
+    function renderSubscriptionTable() {
         const body = document.querySelector('#cfSBSubTable tbody');
         if (!body) return;
         body.innerHTML = state.subscriptions.length ? state.subscriptions.map((item) => {
             const id = esc(item.id || '');
+            const disabled = state.running ? ' disabled' : '';
             return `<tr>
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);"><b>${esc(item.name || '(未命名)')}</b></td>
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(item.url || '')}">${esc(item.url || '')}</td>
@@ -397,13 +445,20 @@
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);font-size:11px;word-break:break-all;">${esc(item.configPath || '-')}</td>
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);font-size:11px;word-break:break-all;">${esc(item.providerPath || '-')}</td>
                 <td style="padding:10px;border-bottom:1px solid var(--border-color);"><div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    <button class="action-btn" onclick="window.__cfSBEdit('${id}')">编辑</button>
-                    <button class="action-btn export-btn" onclick="window.__cfSBSync('${id}')">更新</button>
-                    <button class="action-btn" onclick="window.__cfSBDiagnose('${id}')">诊断</button>
-                    <button class="action-btn" onclick="window.__cfSBDelete('${id}')">删除</button>
+                    <button class="action-btn"${disabled} onclick="window.__cfSBEdit('${id}')">编辑</button>
+                    <button class="action-btn export-btn"${disabled} onclick="window.__cfSBSync('${id}')">更新</button>
+                    <button class="action-btn"${disabled} onclick="window.__cfSBDiagnose('${id}')">诊断</button>
+                    <button class="action-btn"${disabled} onclick="window.__cfSBDelete('${id}')">删除</button>
                 </div></td>
             </tr>`;
         }).join('') : '<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--text-secondary);">还没有订阅，请先添加一个 URL。</td></tr>';
+    }
+
+    async function loadSubs() {
+        const data = await api('/api/subscription/singbox/subscriptions');
+        state.subscriptions = Array.isArray(data.subscriptions) ? data.subscriptions : [];
+        updateMetrics();
+        renderSubscriptionTable();
     }
 
     function bridgeCall(method, payload) {
@@ -619,6 +674,39 @@
         }
     }
 
+    function setBusy(busy) {
+        state.running = !!busy;
+        const ids = ['cfSBForce','cfSBBatch','cfSBRefresh','cfSBSave','cfSBSaveOnly','cfSBCancel','cfSBLatencyConcurrency','cfSBSpeedUrlPreset','cfSBSpeedUrl','cfSBSpeedUrlReset','cfSBNodeFilter','cfSBNodeResultFilter','cfSBNodeFilterReset'];
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = !!busy;
+        });
+        renderSubscriptionTable();
+        renderNodes(state.nodes);
+    }
+
+    function syncNodeFiltersUI() {
+        const input = document.getElementById('cfSBNodeFilter');
+        const select = document.getElementById('cfSBNodeResultFilter');
+        if (input) input.value = state.nodeFilter;
+        if (select) select.value = state.nodeResultFilter;
+    }
+
+    function filteredNodes() {
+        const needle = String(state.nodeFilter || '').trim().toLowerCase();
+        const filter = state.nodeResultFilter || 'all';
+        return state.nodes.filter(node => {
+            const result = node.lastTest;
+            if (filter === 'passed' && !result?.success) return false;
+            if (filter === 'failed' && (!result || result.success)) return false;
+            if (filter === 'untested' && result) return false;
+            if (!needle) return true;
+            const sourceText = (node.sources || []).map(s => `${s.subscriptionName || ''} ${s.nodeTag || ''}`).join(' ');
+            const haystack = `${node.name || ''} ${node.server || ''} ${node.port || ''} ${node.protocol || ''} ${sourceText}`.toLowerCase();
+            return haystack.includes(needle);
+        });
+    }
+
     async function syncAll() {
         try {
             setPhase('sync');
@@ -704,11 +792,15 @@
         if (count) count.textContent = String(state.nodes.length);
         const body = document.querySelector('#cfSBNodeTable tbody');
         if (!body) return;
-        if (!state.nodes.length) {
-            body.innerHTML = '<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-secondary);">没有可识别节点。请先更新 Provider1，并确认节点数量大于 0。</td></tr>';
+        const visible = filteredNodes();
+        const visibleCount = document.getElementById('cfSBNodeVisibleCount');
+        if (visibleCount) visibleCount.textContent = `显示 ${visible.length} / ${state.nodes.length}`;
+        if (!visible.length) {
+            const message = state.nodes.length ? '当前筛选条件没有匹配节点。' : '没有可识别节点。请先更新 Provider1，并确认节点数量大于 0。';
+            body.innerHTML = `<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--text-secondary);">${message}</td></tr>`;
             return;
         }
-        body.innerHTML = state.nodes.map((node) => `<tr>
+        body.innerHTML = visible.map((node) => `<tr>
             <td style="padding:10px;border-bottom:1px solid var(--border-color);"><b>${esc(node.name || '-')}</b></td>
             <td style="padding:10px;border-bottom:1px solid var(--border-color);font-family:ui-monospace,monospace;">${esc(node.server || '-')} : ${esc(node.port || '-')}</td>
             <td style="padding:10px;border-bottom:1px solid var(--border-color);">${esc(node.protocol || '-')}</td>
@@ -859,11 +951,13 @@
         if (state.running) return;
         const node = state.nodes.find((entry) => entry.id === id);
         if (!node || !node.outbound) return status('节点缺少 reF1nd outbound 配置，请重新同步 Provider1', true);
-        state.running = true;
+        setBusy(true);
         try {
             setPhase('latency');
+            setProgress(0, true);
             status(`${node.name || id}：正在做 ${LATENCY_REPEAT} 次真实 HTTP 延迟测试……`);
             const latency = latencyTestNode(node);
+            setProgress(55, false);
             node.lastTest = latency;
             renderNodes(state.nodes);
             if (!latency.success) {
@@ -874,12 +968,14 @@
             status(`${node.name || id}：延迟 ${Number(latency.avgLatencyMs || 0).toFixed(0)}ms，开始连续 ${SPEED_DURATION_SECONDS} 秒测速……`);
             const speed = speedTestNode(node, latency);
             mergeSpeedIntoNode(node, latency, speed);
+            setProgress(100, false);
             renderNodes(state.nodes);
             status(`${node.name || id}：${resultText(node.lastTest)}`, !speed.success);
         } catch (error) {
             status(`真连接测试失败：${error.message}`, true);
         } finally {
-            state.running = false;
+            setBusy(false);
+            setProgress(100, false);
             setPhase('idle');
             renderNodes(state.nodes);
         }
@@ -890,9 +986,10 @@
         if (!state.nodes.length) return status('没有节点可测试', true);
         const nodes = state.nodes.filter((node) => node.outbound);
         if (!nodes.length) return status('当前节点没有可用的 reF1nd outbound', true);
-        state.running = true;
+        setBusy(true);
         try {
             setPhase('latency');
+            setProgress(0, true);
             status(`第一阶段：${nodes.length} 个节点并行做 ${LATENCY_REPEAT} 次真实 HTTP 延迟测试（并发 ${state.latencyConcurrency}）……`);
             const concurrency = LATENCY_CONCURRENCY_OPTIONS.includes(Number(state.latencyConcurrency))
                 ? Number(state.latencyConcurrency)
@@ -905,6 +1002,7 @@
             };
             const latencyBatch = bridgeCall('singBoxTrueLatencyTest', latencyPayload);
             const batchResults = Array.isArray(latencyBatch?.results) ? latencyBatch.results : [];
+            setProgress(55, false);
             const resultById = new Map(batchResults.map((result) => [String(result.nodeId || ''), result]));
             nodes.forEach((node) => {
                 const result = resultById.get(String(node.id));
@@ -926,6 +1024,7 @@
                 status(`第二阶段：${i + 1}/${latencyPassed.length} · ${node.name || node.id} · ${Number(latency.avgLatencyMs || 0).toFixed(0)}ms → ${SPEED_DURATION_SECONDS}s 下载……`);
                 const speed = speedTestNode(node, latency);
                 mergeSpeedIntoNode(node, latency, speed);
+                setProgress(55 + Math.round(((i + 1) / Math.max(1, latencyPassed.length)) * 45), false);
                 if (i === latencyPassed.length - 1 || (i + 1) % 3 === 0) renderNodes(state.nodes);
                 if (i < latencyPassed.length - 1) await new Promise(resolve => setTimeout(resolve, INTER_SPEED_PAUSE_MS));
             }
@@ -935,7 +1034,8 @@
         } catch (error) {
             status(`批量测试失败：${error.message}`, true);
         } finally {
-            state.running = false;
+            setBusy(false);
+            setProgress(100, false);
             setPhase('idle');
             renderNodes(state.nodes);
         }
@@ -987,6 +1087,9 @@
         document.getElementById('cfSBForce').onclick = syncAll;
         document.getElementById('cfSBBatch').onclick = batch;
         document.getElementById('cfSBRefresh').onclick = () => { loadSubs(); refreshNodes(false); };
+        document.getElementById('cfSBNodeFilter').oninput = (event) => { state.nodeFilter = String(event.target.value || ''); renderNodes(state.nodes); };
+        document.getElementById('cfSBNodeResultFilter').onchange = (event) => { state.nodeResultFilter = String(event.target.value || 'all'); renderNodes(state.nodes); };
+        document.getElementById('cfSBNodeFilterReset').onclick = () => { state.nodeFilter = ''; state.nodeResultFilter = 'all'; syncNodeFiltersUI(); renderNodes(state.nodes); };
         document.getElementById('cfSBModalClose').onclick = () => { document.getElementById('cfSBModal').style.display = 'none'; };
         document.getElementById('cfSBSpeedUrlPreset').onchange = syncRSpeedUrlUI;
         document.getElementById('cfSBLatencyConcurrency').onchange = (event) => {
@@ -1006,6 +1109,8 @@
             syncRSpeedUrlUI();
         };
         setPhase('idle');
+        syncNodeFiltersUI();
+        setProgress(0, false);
         setVisible(false);
     }
 

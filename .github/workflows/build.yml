@@ -69,6 +69,18 @@ jobs:
             echo "AGP 9 built-in Kotlin migration incomplete: old Kotlin Android plugin/options remain" >&2
             exit 1
           fi
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          root = Path('.')
+          top = (root / 'build.gradle').read_text(encoding='utf-8')
+          module = (root / 'app/build.gradle').read_text(encoding='utf-8')
+          if not re.search(r'id\s+"com\.android\.application"\s+version\s+"9\.3\.1"\s+apply\s+false', top):
+              raise SystemExit('AGP 9.3.1 declaration not found in root build.gradle')
+          if re.search(r'org\.jetbrains\.kotlin\.android|kotlinOptions', top + "\n" + module):
+              raise SystemExit('legacy Kotlin Gradle plugin/options still present')
+          print('AGP 9.3.1 + built-in Kotlin declarations verified.')
+          PY
           test -s app/src/main/assets/singbox-r-template.json
           grep -Fq 'id="btnSingBoxR"' combined_refactor/index.html
           grep -Fq 'id="singboxRControls"' combined_refactor/index.html
@@ -426,8 +438,14 @@ jobs:
           ./gradlew --version
           test -f gradle/wrapper/gradle-wrapper.properties
           grep -Fq 'gradle-9.7.0-bin.zip' gradle/wrapper/gradle-wrapper.properties
-          grep -Fq 'version \"9.3.1\"' build.gradle
-          echo "AGP 9.3.1 + Gradle 9.7.0 toolchain selected."
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          top = Path('build.gradle').read_text(encoding='utf-8')
+          assert re.search(r'id\s+"com\.android\.application"\s+version\s+"9\.3\.1"\s+apply\s+false', top)
+          print('AGP 9.3.1 + Gradle 9.7.0 toolchain selected.')
+          PY
+          ./gradlew help --no-daemon --stacktrace --warning-mode all
 
       - name: Build release APK
         env:
